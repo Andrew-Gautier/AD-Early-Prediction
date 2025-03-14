@@ -1,0 +1,173 @@
+File: 10visit_combined.csv
+All NaN: 11
+1 valid entries: 31
+2 valid entries: 61
+3 valid entries: 59
+4 valid entries: 32
+5 valid entries: 32
+6 valid entries: 29
+7 valid entries: 30
+8 valid entries: 42
+9 valid entries: 41
+10 valid entries: 43
+File: 11visit_combined.csv
+All NaN: 8
+1 valid entries: 4
+2 valid entries: 46
+3 valid entries: 61
+4 valid entries: 42
+5 valid entries: 23
+6 valid entries: 19
+7 valid entries: 32
+8 valid entries: 33
+9 valid entries: 36
+10 valid entries: 13
+11 valid entries: 38
+File: 12visit_combined.csv
+All NaN: 8
+1 valid entries: 1
+2 valid entries: 7
+3 valid entries: 44
+4 valid entries: 44
+5 valid entries: 28
+6 valid entries: 28
+7 valid entries: 24
+8 valid entries: 35
+9 valid entries: 23
+10 valid entries: 9
+11 valid entries: 11
+12 valid entries: 25
+File: 13visit_combined.csv
+All NaN: 2
+2 valid entries: 1
+3 valid entries: 16
+4 valid entries: 25
+5 valid entries: 31
+6 valid entries: 28
+7 valid entries: 37
+8 valid entries: 26
+9 valid entries: 24
+10 valid entries: 7
+11 valid entries: 9
+12 valid entries: 4
+13 valid entries: 24
+File: 14visit_combined.csv
+All NaN: 1
+3 valid entries: 4
+4 valid entries: 7
+5 valid entries: 15
+6 valid entries: 24
+7 valid entries: 26
+8 valid entries: 27
+9 valid entries: 25
+10 valid entries: 5
+11 valid entries: 4
+13 valid entries: 4
+14 valid entries: 3
+File: 15visit_combined.csv
+3 valid entries: 5
+5 valid entries: 3
+6 valid entries: 15
+7 valid entries: 28
+8 valid entries: 23
+9 valid entries: 17
+10 valid entries: 3
+11 valid entries: 3
+12 valid entries: 2
+13 valid entries: 4
+14 valid entries: 4
+15 valid entries: 1
+File: 16visit_combined.csv
+2 valid entries: 1
+6 valid entries: 1
+7 valid entries: 18
+8 valid entries: 23
+9 valid entries: 27
+10 valid entries: 8
+11 valid entries: 3
+12 valid entries: 2
+13 valid entries: 8
+14 valid entries: 2
+15 valid entries: 1
+File: 17visit_combined.csv
+7 valid entries: 6
+8 valid entries: 9
+9 valid entries: 29
+10 valid entries: 23
+11 valid entries: 1
+13 valid entries: 3
+14 valid entries: 3
+16 valid entries: 1
+File: 18visit_combined.csv
+8 valid entries: 2
+9 valid entries: 13
+10 valid entries: 14
+11 valid entries: 8
+12 valid entries: 1
+14 valid entries: 3
+15 valid entries: 1
+File: 19visit_combined.csv
+9 valid entries: 1
+10 valid entries: 6
+11 valid entries: 5
+12 valid entries: 2
+File: 2visit_combined.csv
+All NaN: 2000
+1 valid entries: 184
+2 valid entries: 1612
+File: 3visit_combined.csv
+All NaN: 1057
+1 valid entries: 117
+2 valid entries: 170
+3 valid entries: 929
+File: 4visit_combined.csv
+All NaN: 909
+1 valid entries: 86
+2 valid entries: 109
+3 valid entries: 137
+4 valid entries: 694
+File: 5visit_combined.csv
+All NaN: 691
+1 valid entries: 81
+2 valid entries: 56
+3 valid entries: 64
+4 valid entries: 94
+5 valid entries: 427
+File: 6visit_combined.csv
+All NaN: 551
+1 valid entries: 67
+2 valid entries: 62
+3 valid entries: 56
+4 valid entries: 49
+5 valid entries: 63
+6 valid entries: 343
+File: 7visit_combined.csv
+All NaN: 320
+1 valid entries: 55
+2 valid entries: 66
+3 valid entries: 66
+4 valid entries: 51
+5 valid entries: 47
+6 valid entries: 77
+7 valid entries: 239
+File: 8visit_combined.csv
+All NaN: 154
+1 valid entries: 53
+2 valid entries: 57
+3 valid entries: 46
+4 valid entries: 32
+5 valid entries: 34
+6 valid entries: 33
+7 valid entries: 66
+8 valid entries: 120
+File: 9visit_combined.csv
+All NaN: 76
+1 valid entries: 61
+2 valid entries: 60
+3 valid entries: 57
+4 valid entries: 30
+5 valid entries: 30
+6 valid entries: 30
+7 valid entries: 43
+8 valid entries: 57
+9 valid entries: 68
