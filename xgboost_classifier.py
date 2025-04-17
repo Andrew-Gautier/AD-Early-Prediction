@@ -125,6 +125,42 @@ def preprocess_data(df, progression_type):
         df[col] = df[col].astype('category').cat.codes  # Convert to numeric codes
     
     return df
+def aggregate_original_features(df):
+    """Aggregate time-series features using mean and combine with static features"""
+    df = df.copy()
+    
+    # Parse array strings into lists
+    for col in df.columns:
+        if df[col].dtype == object and df[col].str.startswith('[').any():
+            df[col] = df[col].apply(
+                lambda x: [float(v.strip()) if v.strip() != 'nan' else np.nan 
+                         for v in x.replace('[','').replace(']','').split(',')] 
+                if isinstance(x, str) and x.startswith('[') else np.nan
+            )
+    
+    # Aggregate time-series features using mean
+    aggregated_features = {}
+    time_series_cols = [col for col in df.columns if isinstance(df[col].iloc[0], list)]
+    
+    for col in time_series_cols:
+        aggregated_features[col] = df[col].apply(
+            lambda x: np.nanmean(x) if isinstance(x, list) else np.nan
+        )
+    
+    # Static features (non-time-series)
+    static_features = [
+        'SEX', 'EDUC', 'ALCOHOL', 'NACCFAM', 'CVHATT', 
+        'CVAFIB', 'DIABETES', 'HYPERCHO', 'HYPERTEN', 'B12DEF', 'DEPD', 
+        'ANX', 'NACCTBI', 'SMOKYRS', 'RACE', 'age'
+    ]
+    static_features = [f for f in static_features if f in df.columns]
+    
+    # Combine aggregated features with static features
+    aggregated_df = pd.DataFrame(aggregated_features)
+    static_df = df[static_features]
+    combined_df = pd.concat([static_df, aggregated_df], axis=1)
+    
+    return combined_df
 
 def build_model(data):
     # Separate features and target
@@ -187,5 +223,29 @@ def plot_feature_importance(model, feature_names, top_n=20):
     plt.figure(figsize=(10, 8))
     sns.barplot(x='Importance', y='Feature', data=feature_importance.head(top_n))
     plt.title(f'Top {top_n} Feature Importance')
+    plt.tight_layout()
+    plt.show()
+    
+def plot_feature_correlation(df, figsize):
+    """Plot correlation matrix for aggregated features"""
+    # Impute missing values
+    imputer = SimpleImputer(strategy='median')
+    df_imputed = pd.DataFrame(imputer.fit_transform(df), columns=df.columns)
+    
+    # Compute correlations
+    corr = df_imputed.corr()
+    
+    # Plot heatmap
+    plt.figure(figsize=figsize)
+    sns.heatmap(
+        corr, 
+        cmap='coolwarm', 
+        center=0,
+        annot=False, 
+        fmt=".2f",
+        linewidths=0.5,
+        cbar_kws={"shrink": 0.8}
+    )
+    plt.title("Feature Correlation Map (Original Features)")
     plt.tight_layout()
     plt.show()
