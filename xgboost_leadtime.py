@@ -8,9 +8,20 @@ from sklearn.impute import SimpleImputer
 from scipy.stats import linregress
 import matplotlib.pyplot as plt
 import seaborn as sns
+from sklearn.preprocessing import StandardScaler
+from sklearn.impute import SimpleImputer
+imputer = SimpleImputer(strategy='median')
+scaler = StandardScaler()
 
-
-# This is the classifer used for visits 2-6 classification scores and charts. 
+def add_time_dimension(df, months_between_visits=12):
+    """Adds a column for months elapsed since baseline (V1) for each visit."""
+    df = df.copy()
+    
+    # Example: For a patient with 3 visits, time points are [0, 12, 24] months
+    df['months_since_baseline'] = df['Progression'].apply(
+        lambda x: [i * months_between_visits for i in range(len(eval(x)))]
+    )
+    return df
 
 def create_target_variable_ad(row):
     """Create binary target from Progression column (1=progressed, 0=stable)"""
@@ -20,22 +31,22 @@ def create_target_variable_mci(row):
     """Create binary target from Progression column (1=progressed, 0=stable)"""
     progression = eval(row['Progression'])  # Convert string tuple to actual tuple
     return 1 if 1 in progression else 0  # 1 if progressed to AD at any visit
-def create_delta_features(df):
-    """
-    Enhanced version that:
-    1. Safely parses array strings first
-    2. Handles mixed numeric/non-numeric data
-    3. Creates features for variable visit lengths
-    """
+
+def create_delta_features_truncated(df, max_visit):
+    """Create features up to a specified visit (e.g., max_visit=3 for visits 1-3)."""
+    # ... (same as original, but limit visits to max_visit)
+    for col in df.columns:
+        if isinstance(df[col].iloc[0], list):
+            truncated_series = df[col].apply(lambda x: x[:max_visit] if isinstance(x, list) else np.nan)
+            # Calculate deltas/slopes using truncated_series
     df = df.copy()
     new_columns = {}  # Dictionary to store new columns
-
     # First pass: Convert all array-strings to lists of floats
     for col in df.columns:
         if df[col].dtype == object and df[col].str.startswith('[').any():
             df[col] = df[col].apply(
                 lambda x: [float(v.strip()) if v.strip() != 'nan' else np.nan 
-                         for v in x.replace('[','').replace(']','').split(',')] 
+                        for v in x.replace('[','').replace(']','').split(',')] 
                 if isinstance(x, str) and x.startswith('[') else np.nan
             )
     
@@ -82,10 +93,68 @@ def create_delta_features(df):
     # Drop original array columns (keep only engineered features)
     array_cols = [col for col in df.columns if isinstance(df[col].iloc[0], list)] if len(df) > 0 else []
     df = df.drop(columns=array_cols)
-    
+        
     return df
 
-# Preprocess the data
+def get_first_progression_visit(row, progression_code=1):
+    """Return the first visit where progression to MCI (1) or AD (2) occurred."""
+    progression = eval(row['Progression'])
+    for i, code in enumerate(progression):
+        if code >= progression_code:  # 1 for MCI, 2 for AD
+            return i + 1  # Visits are 1-indexed
+    return np.nan  # No progression
+
+def evaluate_lead_time(df, models, progression_type='MCI', threshold=0.5):
+    lead_times = []
+    preprocessed = preprocess_data(df, progression_type)
+    scaler = preprocessed['scaler']
+    imputer = preprocessed['imputer']
+    features = preprocessed['features']
+    
+    for _, row in df.iterrows():
+        progression = eval(row['Progression'])
+        months_since_baseline = row['months_since_baseline']  # Added in Step 1
+        
+        # Skip if no progression or time data is missing
+        if not isinstance(months_since_baseline, list) or len(months_since_baseline) == 0:
+            continue
+        
+        # Find physician's diagnosis time (first progression visit)
+        diagnosis_visit_idx = None
+        for i, code in enumerate(progression):
+            if code >= (2 if progression_type == 'AD' else 1):
+                diagnosis_visit_idx = i
+                break
+        
+        if diagnosis_visit_idx is None:
+            continue  # No progression
+        
+        diagnosis_time = months_since_baseline[diagnosis_visit_idx]
+        
+        
+        # Check model predictions at earlier visits
+        for visit in range(1, diagnosis_visit_idx + 1):  # Start from V1
+            # Preprocess data up to this visit
+            df_truncated = create_delta_features_truncated(df, max_visit=visit)
+            data = preprocess_data(df_truncated, progression_type)
+            
+            if 'target' not in data.columns:
+                continue
+            
+            # Predict
+            X = data.drop('target', axis=1)
+            X_imputed = imputer.transform(X)
+            X_scaled = scaler.transform(X_imputed)
+            proba = models[visit].predict_proba(X_scaled)[:, 1]
+            
+            if proba >= threshold:
+                prediction_time = months_since_baseline[visit - 1]  # 0-based index
+                lead_time = diagnosis_time - prediction_time
+                lead_times.append(lead_time)
+                break  # Earliest prediction
+    
+    return lead_times
+
 def preprocess_data(df, progression_type):
     # Create target variable
     if progression_type == 'AD':
@@ -123,146 +192,5 @@ def preprocess_data(df, progression_type):
     categorical_cols = [col for col in categorical_cols if col in df.columns]  # Only keep existing cols
     for col in categorical_cols:
         df[col] = df[col].astype('category').cat.codes  # Convert to numeric codes
-    
-    X = df[features]
-    y = df['target']
-    
-    # Fit scaler and imputer
-    imputer = SimpleImputer(strategy='mean')
-    scaler = StandardScaler()
-    
-    X_imputed = imputer.fit_transform(X)
-    X_scaled = scaler.fit_transform(X_imputed)
-    
-    # Update DataFrame with scaled values
-    df_scaled = df.copy()
-    df_scaled[features] = X_scaled
-    
-    # Return both the processed DataFrame AND the scaler
-    return df_scaled, scaler
 
-
-def aggregate_original_features(df):
-    """Aggregate time-series features using mean and combine with static features"""
-    df = df.copy()
-    
-    # Parse array strings into lists
-    for col in df.columns:
-        if df[col].dtype == object and df[col].str.startswith('[').any():
-            df[col] = df[col].apply(
-                lambda x: [float(v.strip()) if v.strip() != 'nan' else np.nan 
-                         for v in x.replace('[','').replace(']','').split(',')] 
-                if isinstance(x, str) and x.startswith('[') else np.nan
-            )
-    
-    # Aggregate time-series features using mean
-    aggregated_features = {}
-    time_series_cols = [col for col in df.columns if isinstance(df[col].iloc[0], list)]
-    
-    for col in time_series_cols:
-        aggregated_features[col] = df[col].apply(
-            lambda x: np.nanmean(x) if isinstance(x, list) else np.nan
-        )
-    
-    # Static features (non-time-series)
-    static_features = [
-        'SEX', 'EDUC', 'ALCOHOL', 'NACCFAM', 'CVHATT', 
-        'CVAFIB', 'DIABETES', 'HYPERCHO', 'HYPERTEN', 'B12DEF', 'DEPD', 
-        'ANX', 'NACCTBI', 'SMOKYRS', 'RACE', 'age'
-    ]
-    static_features = [f for f in static_features if f in df.columns]
-    
-    # Combine aggregated features with static features
-    aggregated_df = pd.DataFrame(aggregated_features)
-    static_df = df[static_features]
-    combined_df = pd.concat([static_df, aggregated_df], axis=1)
-    
-    return combined_df
-
-def build_model(data):
-    # Separate features and target
-    X = data.drop('target', axis=1)
-    y = data['target']
-    
-    # Split data into train and test sets
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
-    )
-    
-    # Handle missing values
-    imputer = SimpleImputer(strategy='median')
-    X_train = imputer.fit_transform(X_train)
-    X_test = imputer.transform(X_test)
-    
-    # Scale numerical features
-    scaler = StandardScaler()
-    X_train = scaler.fit_transform(X_train)
-    X_test = scaler.transform(X_test)
-    
-    # Handle class imbalance
-    scale_pos_weight = (len(y_train) - sum(y_train)) / sum(y_train) if sum(y_train) > 0 else 1
-    
-    # Train XGBoost model
-    model = XGBClassifier(
-        objective='binary:logistic',
-        eval_metric='auc',
-        n_estimators=200,
-        max_depth=5,
-        learning_rate=0.1,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        random_state=42,
-        scale_pos_weight=scale_pos_weight
-    )
-    
-    model.fit(X_train, y_train)
-    
-    # Evaluate model
-    y_pred = model.predict(X_test)
-    y_proba = model.predict_proba(X_test)[:, 1]
-    
-    print("Classification Report:")
-    print(classification_report(y_test, y_pred))
-    
-    print(f"\nROC AUC Score: {roc_auc_score(y_test, y_proba):.4f}")
-    
-    return model, X.columns
-
-def plot_feature_importance(model, feature_names, top_n=20):
-    # Get feature importance
-    importance = model.feature_importances_
-    feature_importance = pd.DataFrame({
-        'Feature': feature_names,
-        'Importance': importance
-    }).sort_values('Importance', ascending=False)
-    
-    # Plot
-    plt.figure(figsize=(10, 8))
-    sns.barplot(x='Importance', y='Feature', data=feature_importance.head(top_n))
-    plt.title(f'Top {top_n} Feature Importance')
-    plt.tight_layout()
-    plt.show()
-    
-def plot_feature_correlation(df, figsize):
-    """Plot correlation matrix for aggregated features"""
-    # Impute missing values
-    imputer = SimpleImputer(strategy='median')
-    df_imputed = pd.DataFrame(imputer.fit_transform(df), columns=df.columns)
-    
-    # Compute correlations
-    corr = df_imputed.corr()
-    
-    # Plot heatmap
-    plt.figure(figsize=figsize)
-    sns.heatmap(
-        corr, 
-        cmap='coolwarm', 
-        center=0,
-        annot=False, 
-        fmt=".2f",
-        linewidths=0.5,
-        cbar_kws={"shrink": 0.8}
-    )
-    plt.title("Feature Correlation Map (Original Features)")
-    plt.tight_layout()
-    plt.show()
+    return df
