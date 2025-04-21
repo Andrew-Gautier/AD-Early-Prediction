@@ -139,7 +139,7 @@ def preprocess_data(df, progression_type):
     df_scaled[features] = X_scaled
     
     # Return both the processed DataFrame AND the scaler
-    return df_scaled, scaler
+    return df_scaled, scaler, imputer
 
 
 def aggregate_original_features(df):
@@ -190,14 +190,14 @@ def build_model(data):
     )
     
     # Handle missing values
-    imputer = SimpleImputer(strategy='median')
-    X_train = imputer.fit_transform(X_train)
-    X_test = imputer.transform(X_test)
+    # imputer = SimpleImputer(strategy='median')
+    # X_train = imputer.fit_transform(X_train)
+    # X_test = imputer.transform(X_test)
     
-    # Scale numerical features
-    scaler = StandardScaler()
-    X_train = scaler.fit_transform(X_train)
-    X_test = scaler.transform(X_test)
+    # # Scale numerical features
+    # scaler = StandardScaler()
+    # X_train = scaler.fit_transform(X_train)
+    # X_test = scaler.transform(X_test)
     
     # Handle class imbalance
     scale_pos_weight = (len(y_train) - sum(y_train)) / sum(y_train) if sum(y_train) > 0 else 1

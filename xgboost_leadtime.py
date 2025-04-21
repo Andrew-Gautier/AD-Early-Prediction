@@ -33,14 +33,13 @@ def create_target_variable_mci(row):
     return 1 if 1 in progression else 0  # 1 if progressed to AD at any visit
 
 def create_delta_features_truncated(df, max_visit):
-    """Create features up to a specified visit (e.g., max_visit=3 for visits 1-3)."""
-    # ... (same as original, but limit visits to max_visit)
-    for col in df.columns:
-        if isinstance(df[col].iloc[0], list):
-            truncated_series = df[col].apply(lambda x: x[:max_visit] if isinstance(x, list) else np.nan)
-            # Calculate deltas/slopes using truncated_series
+    """
+    Create features up to a specified visit (e.g., max_visit=3 for visits 1-3).
+    Preserves the months_since_baseline column and handles data truncation properly.
+    """
     df = df.copy()
-    new_columns = {}  # Dictionary to store new columns
+    new_columns = {}
+    
     # First pass: Convert all array-strings to lists of floats
     for col in df.columns:
         if df[col].dtype == object and df[col].str.startswith('[').any():
@@ -53,21 +52,25 @@ def create_delta_features_truncated(df, max_visit):
     # Second pass: Create features only for numeric arrays
     for col in df.columns:
         if isinstance(df[col].iloc[0], list) and all(isinstance(v, (int, float)) for v in df[col].iloc[0] if not pd.isna(v)):
-            max_visits = max(len(v) for v in df[col] if isinstance(v, list))
+            # Truncate to max_visit first
+            df[col] = df[col].apply(lambda x: x[:max_visit] if isinstance(x, list) else np.nan)
             
-            # 1. Individual visit values
+            max_visits = min(max_visit, max(len(v) for v in df[col] if isinstance(v, list)))
+            
+            # 1. Individual visit values (only up to max_visit)
             for i in range(max_visits):
                 new_columns[f"{col}_V{i+1}"] = df[col].apply(
                     lambda x: x[i] if isinstance(x, list) and i < len(x) else np.nan
                 )
             
-            # 2. Deltas from baseline (V1)
-            for i in range(1, max_visits):
-                new_columns[f"{col}_delta_V{i+1}-V1"] = df[col].apply(
-                    lambda x: x[i]-x[0] if isinstance(x, list) and len(x) > i else np.nan
-                )
+            # 2. Deltas from baseline (V1) - only if we have at least 2 visits
+            if max_visits > 1:
+                for i in range(1, max_visits):
+                    new_columns[f"{col}_delta_V{i+1}-V1"] = df[col].apply(
+                        lambda x: x[i]-x[0] if isinstance(x, list) and len(x) > i else np.nan
+                    )
             
-            # 3. Slope of linear trend
+            # 3. Slope of linear trend (needs at least 2 visits)
             def calc_slope(x):
                 if isinstance(x, list) and len(x) > 1:
                     x_vals = np.arange(len(x))
@@ -77,9 +80,10 @@ def create_delta_features_truncated(df, max_visit):
                         return linregress(x_vals[valid], y_vals[valid]).slope
                 return np.nan
                 
-            new_columns[f"{col}_slope"] = df[col].apply(calc_slope)
+            if max_visits > 1:
+                new_columns[f"{col}_slope"] = df[col].apply(calc_slope)
             
-            # 4. Aggregates
+            # 4. Aggregates (calculated on truncated visits)
             new_columns[f"{col}_mean"] = df[col].apply(
                 lambda x: np.nanmean(x) if isinstance(x, list) else np.nan
             )
@@ -88,12 +92,17 @@ def create_delta_features_truncated(df, max_visit):
             )
     
     # Add all new columns to the DataFrame at once
-    df = pd.concat([df, pd.DataFrame(new_columns)], axis=1)
+    df = pd.concat([df, pd.DataFrame(new_columns, index=df.index)], axis=1)
     
-    # Drop original array columns (keep only engineered features)
-    array_cols = [col for col in df.columns if isinstance(df[col].iloc[0], list)] if len(df) > 0 else []
-    df = df.drop(columns=array_cols)
-        
+    # Drop original array columns except months_since_baseline
+    array_cols = [
+        col for col in df.columns
+        if isinstance(df[col].iloc[0], list) and col != 'months_since_baseline'
+    ] if len(df) > 0 else []
+    
+    if array_cols:
+        df = df.drop(columns=array_cols)
+    
     return df
 
 def get_first_progression_visit(row, progression_code=1):
@@ -104,56 +113,115 @@ def get_first_progression_visit(row, progression_code=1):
             return i + 1  # Visits are 1-indexed
     return np.nan  # No progression
 
-def evaluate_lead_time(df, models, progression_type='MCI', threshold=0.5):
+def evaluate_lead_time(df, models_dict, progression_type='MCI', threshold=0.8):
     lead_times = []
-    preprocessed = preprocess_data(df, progression_type)
-    scaler = preprocessed['scaler']
-    imputer = preprocessed['imputer']
-    features = preprocessed['features']
     
-    for _, row in df.iterrows():
-        progression = eval(row['Progression'])
-        months_since_baseline = row['months_since_baseline']  # Added in Step 1
-        
-        # Skip if no progression or time data is missing
-        if not isinstance(months_since_baseline, list) or len(months_since_baseline) == 0:
-            continue
-        
-        # Find physician's diagnosis time (first progression visit)
-        diagnosis_visit_idx = None
-        for i, code in enumerate(progression):
-            if code >= (2 if progression_type == 'AD' else 1):
-                diagnosis_visit_idx = i
-                break
-        
-        if diagnosis_visit_idx is None:
-            continue  # No progression
-        
-        diagnosis_time = months_since_baseline[diagnosis_visit_idx]
-        
-        
-        # Check model predictions at earlier visits
-        for visit in range(1, diagnosis_visit_idx + 1):  # Start from V1
-            # Preprocess data up to this visit
-            df_truncated = create_delta_features_truncated(df, max_visit=visit)
-            data = preprocess_data(df_truncated, progression_type)
+    for idx, row in df.iterrows():
+        try:
+            progression = eval(row['Progression'])
+            months_since_baseline = row['months_since_baseline']
             
-            if 'target' not in data.columns:
+            if not isinstance(months_since_baseline, list):
                 continue
             
-            # Predict
-            X = data.drop('target', axis=1)
-            X_imputed = imputer.transform(X)
-            X_scaled = scaler.transform(X_imputed)
-            proba = models[visit].predict_proba(X_scaled)[:, 1]
+            # Find diagnosis time
+            diagnosis_visit_idx = None
+            for i, code in enumerate(progression):
+                if code >= (2 if progression_type == 'AD' else 1):
+                    diagnosis_visit_idx = i
+                    break
             
-            if proba >= threshold:
-                prediction_time = months_since_baseline[visit - 1]  # 0-based index
-                lead_time = diagnosis_time - prediction_time
-                lead_times.append(lead_time)
-                break  # Earliest prediction
+            if diagnosis_visit_idx is None:
+                continue
+                
+            diagnosis_time = months_since_baseline[diagnosis_visit_idx]
+            
+            # Check predictions at earlier visits
+            for visit in range(1, diagnosis_visit_idx + 1):
+                if visit not in models_dict:
+                    continue
+                    
+                model_data = models_dict[visit]
+                df_truncated = create_delta_features_truncated(df, max_visit=visit)
+                
+                try:
+                    # Get just this patient's data
+                    X = df_truncated.loc[[idx], model_data['model'].feature_names_in_]
+                    
+                    # Impute and scale
+                    X_imputed = model_data['imputer'].transform(X)
+                    X_scaled = model_data['scaler'].transform(X_imputed)
+                    
+                    # Get single probability
+                    proba = model_data['model'].predict_proba(X_scaled)[0, 1]
+                    
+                    if proba >= threshold:
+                        prediction_time = months_since_baseline[visit - 1]
+                        lead_time = diagnosis_time - prediction_time
+                        lead_times.append(lead_time)
+                        break
+                        
+                except Exception as e:
+                    print(f"Error processing visit {visit} for patient {idx}: {str(e)}")
+                    continue
+                    
+        except Exception as e:
+            print(f"Error processing patient {idx}: {str(e)}")
+            continue
     
     return lead_times
+
+# def evaluate_lead_time(df, models_dict, progression_type='MCI', threshold=0.5):
+#     lead_times = []
+#     preprocessed = preprocess_data(df, progression_type)
+#     scaler = preprocessed['scaler']
+#     imputer = preprocessed['imputer']
+#     features = preprocessed['features']
+    
+#     for _, row in df.iterrows():
+#         progression = eval(row['Progression'])
+#         months_since_baseline = row['months_since_baseline']  # Added in Step 1
+        
+#         # Skip if no progression or time data is missing
+#         if not isinstance(months_since_baseline, list) or len(months_since_baseline) == 0:
+#             continue
+        
+#         # Find physician's diagnosis time (first progression visit)
+#         diagnosis_visit_idx = None
+#         for i, code in enumerate(progression):
+#             if code >= (2 if progression_type == 'AD' else 1):
+#                 diagnosis_visit_idx = i
+#                 break
+        
+#         if diagnosis_visit_idx is None:
+#             continue  # No progression
+        
+#         diagnosis_time = months_since_baseline[diagnosis_visit_idx]
+        
+        
+#         # Check model predictions at earlier visits
+#         for visit in range(1, diagnosis_visit_idx + 1):
+#             if visit not in models_dict:
+#                 continue  # Skip if no model for this visit
+                
+#             model_data = models_dict[visit]
+#             df_truncated = create_delta_features_truncated(df, max_visit=visit)
+            
+#             # Prepare features (ensure they match training features)
+#             X = df_truncated[model_data['model'].feature_names_in_].iloc[[row.name]]  # Use XGBoost's built-in feature names
+            
+#             # Impute and scale
+#             X_imputed = model_data['imputer'].transform(X)
+#             X_scaled = model_data['scaler'].transform(X_imputed)
+            
+#             # Predict
+#             proba = model_data['model'].predict_proba(X_scaled)[0, 1]  # Get probability for this specific sample
+#             if proba >= threshold:
+#                 prediction_time = months_since_baseline[visit - 1]
+#                 lead_times.append(diagnosis_time - prediction_time)
+#                 break  # Earliest prediction
+    
+#     return lead_times
 
 def preprocess_data(df, progression_type):
     # Create target variable
