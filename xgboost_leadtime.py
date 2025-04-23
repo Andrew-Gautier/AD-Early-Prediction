@@ -113,7 +113,7 @@ def get_first_progression_visit(row, progression_code=1):
             return i + 1  # Visits are 1-indexed
     return np.nan  # No progression
 
-def evaluate_lead_time(df, models_dict, progression_type='MCI', threshold=0.8):
+def evaluate_lead_time(df, models_dict, threshold, progression_type='MCI'):
     lead_times = []
     
     for idx, row in df.iterrows():
