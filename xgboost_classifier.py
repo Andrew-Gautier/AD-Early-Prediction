@@ -189,16 +189,6 @@ def build_model(data):
         X, y, test_size=0.2, random_state=42, stratify=y
     )
     
-    # Handle missing values
-    # imputer = SimpleImputer(strategy='median')
-    # X_train = imputer.fit_transform(X_train)
-    # X_test = imputer.transform(X_test)
-    
-    # # Scale numerical features
-    # scaler = StandardScaler()
-    # X_train = scaler.fit_transform(X_train)
-    # X_test = scaler.transform(X_test)
-    
     # Handle class imbalance
     scale_pos_weight = (len(y_train) - sum(y_train)) / sum(y_train) if sum(y_train) > 0 else 1
     
