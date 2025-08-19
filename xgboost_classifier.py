@@ -8,7 +8,7 @@ from sklearn.impute import SimpleImputer
 from scipy.stats import linregress
 import matplotlib.pyplot as plt
 import seaborn as sns
-
+from pauc import compute_auc_ci
 
 # This is the classifer used for visits 2-6 classification scores and charts. 
 
@@ -179,7 +179,8 @@ def aggregate_original_features(df):
     
     return combined_df
 
-def build_model(data):
+def split_dataset(data):
+    """Split dataset into training and testing sets. For only the training set, recalculate all scalers and imputers."""
     # Separate features and target
     X = data.drop('target', axis=1)
     y = data['target']
@@ -188,19 +189,45 @@ def build_model(data):
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
     )
+
+    # Fit scaler and imputer
+    imputer = SimpleImputer(strategy='mean')
+    scaler = StandardScaler()
+    
+    # Recalculate all scalers and imputers for the training set
+    X_train = scaler.fit_transform(imputer.fit_transform(X_train))
+
+    return X_train, X_test, y_train, y_test
+
+def build_model(X_train, X_test, y_train, y_test, model_dict):
     
     # Handle class imbalance
     scale_pos_weight = (len(y_train) - sum(y_train)) / sum(y_train) if sum(y_train) > 0 else 1
     
     # Train XGBoost model
+    # model = XGBClassifier(
+    #     objective='binary:logistic',
+    #     eval_metric='auc',
+    #     n_estimators=200,
+    #     max_depth=5,
+    #     learning_rate=0.1,
+    #     subsample=0.8,
+    #     colsample_bytree=0.8,
+    #     random_state=42,
+    #     scale_pos_weight=scale_pos_weight
+    # )
+
+    # Build a model with the input hyperparameter values
     model = XGBClassifier(
         objective='binary:logistic',
         eval_metric='auc',
-        n_estimators=200,
-        max_depth=5,
-        learning_rate=0.1,
-        subsample=0.8,
-        colsample_bytree=0.8,
+
+        n_estimators=model_dict['n_estimators'],
+        max_depth=model_dict['max_depth'],
+        learning_rate=model_dict['learning_rate'],
+        subsample=model_dict['subsample'],
+        colsample_bytree=model_dict['colsample_bytree'],
+
         random_state=42,
         scale_pos_weight=scale_pos_weight
     )
@@ -215,8 +242,14 @@ def build_model(data):
     print(classification_report(y_test, y_pred))
     
     print(f"\nROC AUC Score: {roc_auc_score(y_test, y_proba):.4f}")
-    
-    return model, X.columns
+
+    # Calculate AUC and 95% confidence interval
+    auc, lower_ci, upper_ci = compute_auc_ci(y_test, y_proba, alpha=0.05)
+
+    print(f"AUC: {auc:.3f}")
+    print(f"95% Confidence Interval: ({lower_ci:.3f}, {upper_ci:.3f})")
+
+    return model, X_train.columns
 
 def plot_feature_importance(model, feature_names, top_n=20):
     # Get feature importance
@@ -256,3 +289,19 @@ def plot_feature_correlation(df, figsize):
     plt.title("Feature Correlation Map (Original Features)")
     plt.tight_layout()
     plt.show()
+
+def eval_model(model, x, y):
+    # Evaluate model
+    y_pred = model.predict(X)
+    y_proba = model.predict_proba(X)[:, 1]
+    
+    print("Classification Report:")
+    print(classification_report(y, y_pred))
+    
+    print(f"\nROC AUC Score: {roc_auc_score(y, y_proba):.4f}")
+
+    # Calculate AUC and 95% confidence interval
+    auc, lower_ci, upper_ci = compute_auc_ci(y, y_proba, alpha=0.05)
+
+    print(f"AUC: {auc:.3f}")
+    print(f"95% Confidence Interval: ({lower_ci:.3f}, {upper_ci:.3f})")
