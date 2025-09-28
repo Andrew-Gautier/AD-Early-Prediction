@@ -292,8 +292,8 @@ def plot_feature_correlation(df, figsize):
 
 def eval_model(model, x, y):
     # Evaluate model
-    y_pred = model.predict(X)
-    y_proba = model.predict_proba(X)[:, 1]
+    y_pred = model.predict(x)
+    y_proba = model.predict_proba(x)[:, 1]
     
     print("Classification Report:")
     print(classification_report(y, y_pred))

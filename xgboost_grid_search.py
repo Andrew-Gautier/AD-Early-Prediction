@@ -125,7 +125,6 @@ def preprocess_data(df, progression_type):
         df[col] = df[col].astype('category').cat.codes  # Convert to numeric codes
     
     X = df[features]
-    y = df['target']
     
     # Fit scaler and imputer
     imputer = SimpleImputer(strategy='mean')
@@ -263,7 +262,6 @@ def build_model(X_train, X_test, y_train, y_test, model_dict):
     model.fit(X_train, y_train)
     
     # Evaluate model
-    y_pred = model.predict(X_test)
     y_proba = model.predict_proba(X_test)[:, 1]
 
     return roc_auc_score(y_test, y_proba)
