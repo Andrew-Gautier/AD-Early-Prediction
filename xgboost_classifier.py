@@ -2,13 +2,13 @@ import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import classification_report, roc_auc_score
+from sklearn.metrics import classification_report, roc_auc_score, roc_curve
 from xgboost import XGBClassifier
 from sklearn.impute import SimpleImputer
 from scipy.stats import linregress
 import matplotlib.pyplot as plt
 import seaborn as sns
-from pauc import compute_auc_ci
+from pauc import ci_auc
 
 # This is the classifer used for visits 2-6 classification scores and charts. 
 
@@ -244,7 +244,7 @@ def build_model(X_train, X_test, y_train, y_test, model_dict):
     print(f"\nROC AUC Score: {roc_auc_score(y_test, y_proba):.4f}")
 
     # Calculate AUC and 95% confidence interval
-    auc, lower_ci, upper_ci = compute_auc_ci(y_test, y_proba, alpha=0.05)
+    auc, lower_ci, upper_ci = ci_auc(y_test, y_proba, alpha=0.05)
 
     print(f"AUC: {auc:.3f}")
     print(f"95% Confidence Interval: ({lower_ci:.3f}, {upper_ci:.3f})")
@@ -299,9 +299,17 @@ def eval_model(model, x, y):
     print(classification_report(y, y_pred))
     
     print(f"\nROC AUC Score: {roc_auc_score(y, y_proba):.4f}")
+    
+    # Calculate ROC curve
+    fpr, tpr, thresholds = roc_curve(y, y_proba)
+    roc_obj = (fpr, tpr)
 
-    # Calculate AUC and 95% confidence interval
-    auc, lower_ci, upper_ci = compute_auc_ci(y, y_proba, alpha=0.05)
+    # Calculate AUC and 95% confidence interval using ci_auc
+    auc_value, (lower_ci, upper_ci) = ci_auc(
+        roc_obj,
+        method="delong",      # or "bootstrap"
+        conf_level=0.95
+    )
 
-    print(f"AUC: {auc:.3f}")
+    print(f"AUC: {auc_value:.3f}")
     print(f"95% Confidence Interval: ({lower_ci:.3f}, {upper_ci:.3f})")

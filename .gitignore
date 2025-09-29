@@ -3,3 +3,4 @@ PET/
 venv/
 uds.csv
 unique_naccids.csv
+.venv/

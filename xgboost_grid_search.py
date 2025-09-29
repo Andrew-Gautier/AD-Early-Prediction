@@ -2,13 +2,13 @@ import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import classification_report, roc_auc_score
+from sklearn.metrics import classification_report, roc_auc_score, roc_curve
 from xgboost import XGBClassifier
 from sklearn.impute import SimpleImputer
 from scipy.stats import linregress
 import matplotlib.pyplot as plt
 import seaborn as sns
-from pauc import compute_auc_ci
+from pauc import ci_auc
 
 # This is the classifer used for visits 2-6 classification scores and charts. 
 
@@ -229,11 +229,19 @@ def build_model_final(X_train, X_test, y_train, y_test, model_dict):
     print(classification_report(y_test, y_pred))
     
     print(f"\nROC AUC Score: {roc_auc_score(y_test, y_proba):.4f}")
-
+    fpr, tpr, thresholds = roc_curve(y_test, y_proba)
+    roc_obj = (fpr, tpr)
     # Calculate AUC and 95% confidence interval
-    auc, lower_ci, upper_ci = compute_auc_ci(y_test, y_proba, alpha=0.05)
+    auc_value, (lower_ci, upper_ci) = ci_auc(
+        roc_obj,
+        method="bootstrap",
+        conf_level=0.95,
+        n_boot=100,
+        bounds=[0.6, 1.0],
+        focus ="sensitivity"
+    )
 
-    print(f"AUC: {auc:.3f}")
+    print(f"Partial AUC (boostrap): {auc_value:.3f}")
     print(f"95% Confidence Interval: ({lower_ci:.3f}, {upper_ci:.3f})")
 
     return model, X_train.columns
@@ -284,20 +292,21 @@ def grid_search(x, y, param_grid, csv_path):
     for i, (train_ind, test_ind) in enumerate(skf.split(x,y)):
         # store 5 folds of training and testing dataset in lists
         list_x_train.append(x[train_ind])
-        list_y_train.append(y[train_ind])
+        y_np = np.array(y)
+        list_y_train.append(y_np[train_ind])
         list_x_test.append(x[test_ind])
-        list_y_test.append(y[test_ind])
+        list_y_test.append(y_np[test_ind])
 
     for n_estimators in param_grid['n_estimators']:
         for max_depth in param_grid['max_depth']:
-            for learnint_rate in param_grid['learning_rate']:
+            for learning_rate in param_grid['learning_rate']:
                 for subsample in param_grid['subsample']:
                     for colsample_bytree in param_grid['colsample_bytree']:
                         score_sum = 0
                         model_dict = {
                             'n_estimators': n_estimators,
                             'max_depth': max_depth,
-                            'learning_rate': learnint_rate,
+                            'learning_rate': learning_rate,
                             'subsample': subsample,
                             'colsample_bytree': colsample_bytree
                         }
@@ -307,7 +316,7 @@ def grid_search(x, y, param_grid, csv_path):
 
                         # record and update score
                         score = score_sum / 5
-                        scores.append([n_estimators, max_depth, learnint_rate, subsample, colsample_bytree, score])
+                        scores.append([n_estimators, max_depth, learning_rate, subsample, colsample_bytree, score])
 
                         if (score > best_score):
                             best_score = score
@@ -321,7 +330,7 @@ def grid_search(x, y, param_grid, csv_path):
 #   to get a best performing model with the best set of hyperparameters found from grid-search.
 # Save cross-validation scores to the input new csv path.
 def train_best_model(dataset, progression_type, param_grid, csv_path):
-    processed_df = preprocess_data(create_delta_features(dataset), progression_type)
+    processed_df, scaler, imputer = preprocess_data(create_delta_features(dataset), progression_type)
     
     # first dataset splitting
     X_train, X_test, y_train, y_test = split_dataset(processed_df)
