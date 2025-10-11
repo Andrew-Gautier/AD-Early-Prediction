@@ -8,7 +8,7 @@ from sklearn.impute import SimpleImputer
 from scipy.stats import linregress
 import matplotlib.pyplot as plt
 import seaborn as sns
-from pauc import ci_auc
+from pauc import ROC, ci_auc
 
 # This is the classifer used for visits 2-6 classification scores and charts. 
 
@@ -229,15 +229,15 @@ def build_model_final(X_train, X_test, y_train, y_test, model_dict):
     print(classification_report(y_test, y_pred))
     
     print(f"\nROC AUC Score: {roc_auc_score(y_test, y_proba):.4f}")
-    fpr, tpr, thresholds = roc_curve(y_test, y_proba)
-    roc_obj = (fpr, tpr)
+
+    roc_obj = ROC(y_true= y_test, y_score= y_proba)
     # Calculate AUC and 95% confidence interval
-    auc_value, (lower_ci, upper_ci) = ci_auc(
+    (lower_ci, upper_ci) = ci_auc(
         roc_obj,
         method="bootstrap",
         conf_level=0.95,
         n_boot=100,
-        bounds=[0.6, 1.0],
+        bounds=(0.6, 1.0),
         focus ="sensitivity"
     )
 
