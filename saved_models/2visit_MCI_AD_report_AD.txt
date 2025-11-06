@@ -1,0 +1,31 @@
+Dataset base: 2visit_MCI_AD
+Progression type: AD
+Best hyperparameters:
+  objective: binary:logistic
+  colsample_bytree: 1.0
+  eval_metric: auc
+  learning_rate: 0.01
+  max_depth: 3
+  n_estimators: 200
+  random_state: 42
+  scale_pos_weight: 1.0
+  subsample: 0.8
+
+Classification Report:
+              precision    recall  f1-score   support
+
+           0       0.63      0.73      0.68        45
+           1       0.68      0.57      0.62        44
+
+    accuracy                           0.65        89
+   macro avg       0.66      0.65      0.65        89
+weighted avg       0.65      0.65      0.65        89
+
+
+Base ROC AUC: 0.7263
+Bootstrap 95% CI (n=1000):
+- Accuracy: 0.652 (CI: 0.551, 0.753)
+- Precision (macro): 0.655 (CI: 0.556, 0.757)
+- Recall (macro): 0.651 (CI: 0.554, 0.752)
+- F1 (macro): 0.649 (CI: 0.549, 0.746)
+- ROC AUC: 0.726 (CI: 0.612, 0.830)
