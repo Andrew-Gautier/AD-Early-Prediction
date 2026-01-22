@@ -4,3 +4,4 @@ venv/
 uds.csv
 unique_naccids.csv
 .venv/
+__pycache__/

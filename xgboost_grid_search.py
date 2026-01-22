@@ -19,6 +19,7 @@ import seaborn as sns
 # Removed pauc partial AUC dependency; using manual bootstrap for full ROC AUC CI
 import os
 import joblib
+from imblearn.over_sampling import SMOTENC
 
 # This is the classifer used for visits 2-6 classification scores and charts. 
 
@@ -316,7 +317,7 @@ def split_dataset(data):
     # Separate features and target
     X = data.drop('target', axis=1)
     y = data['target']
-    
+
     # Split data into train and test sets
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
@@ -508,7 +509,7 @@ def grid_search(x, y, param_grid, csv_path):
 def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="saved_models", model_base_name=None, save_artifacts=True):
     processed_df, scaler, imputer = preprocess_data(create_delta_features(dataset), progression_type)
     feature_names = processed_df.drop(columns=['target']).columns.tolist()
-    
+
     # first dataset splitting
     X_train, X_test, y_train, y_test = split_dataset(processed_df)
 
@@ -572,6 +573,4 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
         print(f"- Report:  {report_path}")
 
     return model, columns
-
-
 
