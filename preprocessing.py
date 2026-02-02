@@ -145,3 +145,39 @@ def impute_mmse(df, covariates):
     df['MMSE'] = processed_mmse
     
     return df
+
+# Manually impute a single vector of categorical longitudinal variables
+def m_impute(list):
+    # check the need for imputation
+    if any(np.isnan(x) for x in list) and any((not np.isnan(x)) for x in list):
+        flag = 1
+        # impute nan using closest neighbor (prioritize left neighbor/past point)
+        while flag:
+            flag=0
+            copy=list.copy()
+            for i, x in enumerate(list):
+                # replace nan with any adjacent non-nan neighbor(prioritize left). If no such neighbor, flag=1 to repeat cycle.
+                if np.isnan(x):
+                    if i==0:
+                        # no left neighbor case
+                        if np.isnan(list[i+1]):
+                            flag=1
+                        else: copy[i]=list[i+1]
+                    elif i==len(list)-1:
+                        # no right neighbor case
+                        if np.isnan(list[i-1]):
+                            flag=1
+                        else: copy[i]=list[i-1]
+                    else:
+                        # regular case
+                        if not np.isnan(list[i-1]): copy[i]=list[i-1]
+                        elif not np.isnan(list[i+1]): copy[i]=list[i+1]
+                        else: flag=1    
+            list=copy
+    return list
+
+                        
+                    
+                    
+
+
