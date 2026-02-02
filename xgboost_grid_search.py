@@ -150,18 +150,20 @@ def bootstrap_all_metrics_ci(
     n_boot=1000,
     conf_level=0.95,
     random_state=42,
-    min_valid_auc=30,
+    max_attempts=10000,
     verbose=True,
 ):
     """Bootstrap CIs for accuracy, precision (macro), recall (macro), F1 (macro), and ROC AUC.
 
-    For AUC, resamples missing a class are skipped. Returns a dict:
+    Keeps sampling until n_boot valid (both-class) resamples are collected, up to max_attempts.
+    Returns a dict including a 'valid_samples' key showing how many attempts were needed:
       {
         'accuracy': (point, (lo, hi)),
         'precision_macro': (point, (lo, hi)),
         'recall_macro': (point, (lo, hi)),
         'f1_macro': (point, (lo, hi)),
-        'auc': (point, (lo, hi))
+        'auc': (point, (lo, hi)),
+        'valid_samples': 'n_boot/total_attempts'  # e.g. '1000/1050'
       }
     """
     rng = np.random.default_rng(random_state)
@@ -182,12 +184,21 @@ def bootstrap_all_metrics_ci(
     # Bootstrap arrays
     acc_b, prec_b, rec_b, f1_b = [], [], [], []
     auc_b = []
-    skipped_auc = 0
     n = len(y_true)
+    total_attempts = 0
+    skipped = 0
 
-    for _ in range(n_boot):
+    # Keep sampling until we have n_boot valid samples (or hit max_attempts)
+    while len(auc_b) < n_boot and total_attempts < max_attempts:
+        total_attempts += 1
         idx = rng.choice(n, n, replace=True)
         bt_y = y_true[idx]
+
+        # Skip if resample lacks both classes
+        if len(np.unique(bt_y)) < 2:
+            skipped += 1
+            continue
+
         bt_pred = y_pred[idx]
         bt_score = y_score[idx]
 
@@ -196,16 +207,21 @@ def bootstrap_all_metrics_ci(
         rec_b.append(recall_score(bt_y, bt_pred, average="macro", zero_division=0))
         f1_b.append(f1_score(bt_y, bt_pred, average="macro", zero_division=0))
 
-        if len(np.unique(bt_y)) < 2:
-            skipped_auc += 1
-        else:
-            try:
-                auc_b.append(roc_auc_score(bt_y, bt_score))
-            except ValueError:
-                skipped_auc += 1
+        try:
+            auc_b.append(roc_auc_score(bt_y, bt_score))
+        except ValueError:
+            # Shouldn't happen if unique check passed, but guard anyway
+            skipped += 1
+            # Remove the metrics we just appended since AUC failed
+            acc_b.pop()
+            prec_b.pop()
+            rec_b.pop()
+            f1_b.pop()
+
+    valid_samples_str = f"{len(auc_b)}/{total_attempts}"
 
     if verbose:
-        print(f"Bootstrap classification metrics: attempted={n_boot}, auc_valid={len(auc_b)}, auc_skipped={skipped_auc}")
+        print(f"Bootstrap: valid={len(auc_b)}, total_attempts={total_attempts}, skipped={skipped} ({valid_samples_str})")
 
     # Helper to CI from list
     def ci_bounds(vals):
@@ -216,18 +232,13 @@ def bootstrap_all_metrics_ci(
         )
 
     results = {
-        "accuracy": (acc_pt, ci_bounds(acc_b)),
-        "precision_macro": (prec_pt, ci_bounds(prec_b)),
-        "recall_macro": (rec_pt, ci_bounds(rec_b)),
-        "f1_macro": (f1_pt, ci_bounds(f1_b)),
-        "auc": (auc_pt, (np.nan, np.nan)),
+        "accuracy": (acc_pt, ci_bounds(acc_b) if acc_b else (np.nan, np.nan)),
+        "precision_macro": (prec_pt, ci_bounds(prec_b) if prec_b else (np.nan, np.nan)),
+        "recall_macro": (rec_pt, ci_bounds(rec_b) if rec_b else (np.nan, np.nan)),
+        "f1_macro": (f1_pt, ci_bounds(f1_b) if f1_b else (np.nan, np.nan)),
+        "auc": (auc_pt, ci_bounds(auc_b) if auc_b else (np.nan, np.nan)),
+        "valid_samples": valid_samples_str,
     }
-
-    if len(auc_b) >= min_valid_auc:
-        results["auc"] = (auc_pt, ci_bounds(auc_b))
-    else:
-        if verbose:
-            print(f"Insufficient valid bootstrap samples for AUC (<{min_valid_auc}); CI unavailable.")
 
     return results
 
@@ -385,7 +396,7 @@ def build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_name
     f1_pt, (f1_lo, f1_hi) = metrics["f1_macro"]
     auc_pt, (auc_lo, auc_hi) = metrics["auc"]
 
-    print("\nBootstrap 95% CI (n=1000):")
+    print(f"\nBootstrap 95% CI (n=1000, valid_samples={metrics['valid_samples']}):")
     print(f"- Accuracy: {acc_pt:.3f} (CI: {acc_lo:.3f}, {acc_hi:.3f})")
     print(f"- Precision (macro): {prec_pt:.3f} (CI: {prec_lo:.3f}, {prec_hi:.3f})")
     print(f"- Recall (macro): {rec_pt:.3f} (CI: {rec_lo:.3f}, {rec_hi:.3f})")
@@ -559,7 +570,7 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
             f.write(summary["classification_report"] + "\n")
             f.write(f"\nBase ROC AUC: {summary['base_auc']:.4f}\n")
             bm = summary["bootstrap_metrics"]
-            f.write("Bootstrap 95% CI (n=1000):\n")
+            f.write(f"Bootstrap 95% CI (n=1000, valid_samples={bm['valid_samples']}):\n")
             f.write(f"- Accuracy: {bm['accuracy'][0]:.3f} (CI: {bm['accuracy'][1][0]:.3f}, {bm['accuracy'][1][1]:.3f})\n")
             f.write(f"- Precision (macro): {bm['precision_macro'][0]:.3f} (CI: {bm['precision_macro'][1][0]:.3f}, {bm['precision_macro'][1][1]:.3f})\n")\
             
