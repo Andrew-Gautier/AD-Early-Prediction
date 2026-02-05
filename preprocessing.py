@@ -176,6 +176,95 @@ def m_impute(list):
             list=copy
     return list
 
+# Manually impute GDS using mean
+def impute_gds(list):
+    # check the need for imputation
+    if any(np.isnan(x) for x in list) and any((not np.isnan(x)) for x in list):
+        sum=0
+        count=0
+        # Calculate average score to up to 2 decimal places
+        for x in list:
+            if (not np.isnan(x)): 
+                sum+=x
+                count+=1
+        avg = round(float(sum) / count, 2)
+        # replace nan with average score
+        for i,x in enumerate(list):
+            if (np.isnan(x)):
+                list[i]=avg
+    return list
+
+# Slice eligible samples from greater-visits dataset to select number of continuous time points
+# target_class: 0 for non-progressor in MCI/AD, 
+#               1 for progressor in CN/MCI
+def time_series_slicer(target_class, original_data, target_point_count):
+
+    # filter out ineligible samples
+    if target_class:
+        eligible_ind = []
+        for i, (ind ,r) in enumerate(original_data.iterrows()):
+            # keep progressors with label 0 and 1
+            progression = r['Progression']
+            if isinstance(progression, str):
+                # Convert the string representation of the list to an actual list
+                progression = eval(progression)
+            if (0 in progression) and (1 in progression): eligible_ind.append(i)
+        sliced_data = original_data.iloc[eligible_ind]
+    else:
+        eligible_ind = []
+        for i,(ind,r) in enumerate(original_data.iterrows()):
+            # keep non-progressor with only label 1
+            progression = r['Progression']
+            if isinstance(progression, str):
+                # Convert the string representation of the list to an actual list
+                progression = eval(progression)
+            if (not 0 in progression) and (not 2 in progression): eligible_ind.append(i)
+        sliced_data = original_data.iloc[eligible_ind]
+    
+    # grand dataset needed for age adjustment
+    current_dir = os.path.dirname(os.path.abspath(__file__)) 
+    parent_dir = os.path.dirname(current_dir) 
+    target_file = os.path.join(parent_dir, 'investigator_nacc67.csv')
+    df = pd.read_csv(target_file, header=0)
+
+    for ind, (i, row) in enumerate(sliced_data.iterrows()):
+        if isinstance(row['Progression'], str):
+            # Convert the string representation of the list to an actual list
+            row['Progression'] = eval(row['Progression'])
+        old_tp=0
+        new_tp=0
+        x = row['Progression']
+        if target_class:
+            # for progressors in CN/MCI
+            if any(1==x[a] for a in range(target_point_count)):
+                # if in first n visits, use the first n time points
+                old_tp=0
+                new_tp=target_point_count-1
+            else:
+                # elsewise, use the first progressed visit and n-1 visits ahead of it
+                for a in range(target_point_count, len(x)):
+                    if x[a]==1:
+                        new_tp=a
+                        old_tp= a - target_point_count +1
+                        break
+        else:
+            # for non-progressors in MCI/AD, use the most recent n visits
+            old_tp = len(x)-target_point_count
+            new_tp = len(x)-1
+        
+        # slice time points for all longitudinal variables
+        tags = ['Progression', 'BMI', 'MMSE', 'GDS', 'CDR', "TOBAC30", "BILLS", 'TAXES', 'SHOPPING', 'GAMES', 'STOVE', 'MEALPREP', 'EVENTS', 'PAYATTN', 'REMDATES', 'TRAVEL']
+        for v in tags:
+            if isinstance(row[v], str):
+                row[v]=eval(row[v].replace("nan", "np.nan"))
+            row[v]=row[v][old_tp:new_tp+1]
+        
+        # age adjustment using NACCAGE
+        row['age']=df[df['NACCID']==row['ID']].sort_values(by="NACCAGE", ascending=True).iloc[old_tp]['NACCAGE']
+
+        sliced_data.iloc[ind] = row
+    return sliced_data
+
                         
                     
                     
