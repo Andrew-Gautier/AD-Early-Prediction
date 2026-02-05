@@ -221,11 +221,11 @@ def time_series_slicer(target_class, original_data, target_point_count):
             if (not 0 in progression) and (not 2 in progression): eligible_ind.append(i)
         sliced_data = original_data.iloc[eligible_ind]
     
-    # grand dataset needed for age adjustment
-    current_dir = os.path.dirname(os.path.abspath(__file__)) 
-    parent_dir = os.path.dirname(current_dir) 
-    target_file = os.path.join(parent_dir, 'investigator_nacc67.csv')
-    df = pd.read_csv(target_file, header=0)
+    # # grand dataset needed for age adjustment
+    # current_dir = os.path.dirname(os.path.abspath(__file__)) 
+    # parent_dir = os.path.dirname(current_dir) 
+    # target_file = os.path.join(parent_dir, 'investigator_nacc67.csv')
+    # df = pd.read_csv(target_file, header=0)
 
     for ind, (i, row) in enumerate(sliced_data.iterrows()):
         if isinstance(row['Progression'], str):
@@ -260,7 +260,7 @@ def time_series_slicer(target_class, original_data, target_point_count):
             row[v]=row[v][old_tp:new_tp+1]
         
         # age adjustment using NACCAGE
-        row['age']=df[df['NACCID']==row['ID']].sort_values(by="NACCAGE", ascending=True).iloc[old_tp]['NACCAGE']
+        # row['age']=df[df['NACCID']==row['ID']].sort_values(by="NACCAGE", ascending=True).iloc[old_tp]['NACCAGE']
 
         sliced_data.iloc[ind] = row
     return sliced_data
