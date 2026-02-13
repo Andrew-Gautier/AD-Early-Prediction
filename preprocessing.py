@@ -88,6 +88,7 @@ def clean_all_csv_files_in_directory(directory):
             
 def convert_to_real_nan(row):
     try:
+        if not isinstance(row, str): return row
         # Ensure it's a valid list format
         row = row.replace("nan", "null")  # Replace 'nan' string with 'null' for JSON compatibility
         values = json.loads(row)  # Parse JSON-formatted string into a list
@@ -107,7 +108,7 @@ def impute_mmse(df, covariates):
     covariate_matrix = []
     for col in covariates:
         # Check if the column contains string representations of lists
-        if df[col].dtype == 'object' and df[col].iloc[0].startswith('['):
+        if df[col].dtype == 'object' and str(df[col].iloc[0]).startswith('['):
             # Convert list-type covariates
             col_data = df[col].apply(convert_to_real_nan)
             # For list columns, we'll take all timepoints as separate covariates
@@ -319,31 +320,31 @@ def create_hv(df):
 
             # classify vision
             if np.isnan(row['VISION'][i]):
-                h.append(np.nan)
+                v.append(np.nan)
             elif row['VISION'][i]==1:
                 # normal vision
-                h.append(0)
+                v.append(0)
             else:
                 # abnormal vision without aid, check if aid helps
                 if np.isnan(row['VISCORR'][i]):
                     # unknown aid presence
                     if np.isnan(row['VISWCORR'][i]):
-                        h.append(2)
+                        v.append(2)
                     elif row['VISWCORR'][i]==0:
-                        h.append(2)
+                        v.append(2)
                     else: 
-                        h.append(1)
+                        v.append(1)
                 elif row['VISCORR'][i]==0:
                     # no aid
-                    h.append(2)
+                    v.append(2)
                 else: 
                     # has aid, check if helps
                     if np.isnan(row['VISWCORR'][i]):
-                        h.append(2)
+                        v.append(2)
                     elif row['VISWCORR'][i]==0:
-                        h.append(2)
+                        v.append(2)
                     else: 
-                        h.append(1)
+                        v.append(1)
                 
         hearing.append(h)
         vision.append(v)
