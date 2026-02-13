@@ -221,11 +221,11 @@ def time_series_slicer(target_class, original_data, target_point_count):
             if (not 0 in progression) and (not 2 in progression): eligible_ind.append(i)
         sliced_data = original_data.iloc[eligible_ind]
     
-    # # grand dataset needed for age adjustment
-    # current_dir = os.path.dirname(os.path.abspath(__file__)) 
-    # parent_dir = os.path.dirname(current_dir) 
-    # target_file = os.path.join(parent_dir, 'investigator_nacc67.csv')
-    # df = pd.read_csv(target_file, header=0)
+    # grand dataset needed for age adjustment
+    current_dir = os.path.dirname(os.path.abspath(__file__)) 
+    parent_dir = os.path.dirname(current_dir) 
+    target_file = os.path.join(parent_dir, 'investigator_nacc67.csv')
+    df = pd.read_csv(target_file, header=0)
 
     for ind, (i, row) in enumerate(sliced_data.iterrows()):
         if isinstance(row['Progression'], str):
@@ -248,25 +248,107 @@ def time_series_slicer(target_class, original_data, target_point_count):
                         old_tp= a - target_point_count +1
                         break
         else:
-            # for non-progressors in MCI/AD, use the most recent n visits
-            old_tp = len(x)-target_point_count
-            new_tp = len(x)-1
+            # for non-progressors in MCI/AD, use the most distant n visits
+            old_tp = 0
+            new_tp = target_point_count-1
+
         
         # slice time points for all longitudinal variables
-        tags = ['Progression', 'BMI', 'MMSE', 'GDS', 'CDR', "TOBAC30", "BILLS", 'TAXES', 'SHOPPING', 'GAMES', 'STOVE', 'MEALPREP', 'EVENTS', 'PAYATTN', 'REMDATES', 'TRAVEL']
+        tags = ['Progression', 'BMI', 'MMSE', 'GDS', 'CDR', "TOBAC30", "BILLS", 'TAXES', 'SHOPPING', 'GAMES', 'STOVE', 'MEALPREP', 'EVENTS', 'PAYATTN', 'REMDATES', 'TRAVEL','hearing','vision']
         for v in tags:
             if isinstance(row[v], str):
                 row[v]=eval(row[v].replace("nan", "np.nan"))
             row[v]=row[v][old_tp:new_tp+1]
         
         # age adjustment using NACCAGE
-        # row['age']=df[df['NACCID']==row['ID']].sort_values(by="NACCAGE", ascending=True).iloc[old_tp]['NACCAGE']
+        row['age']=df[df['NACCID']==row['ID']].sort_values(by="NACCAGE", ascending=True).iloc[old_tp]['NACCAGE']
 
         sliced_data.iloc[ind] = row
     return sliced_data
 
-                        
-                    
-                    
+# create new categorical longitudinal variables "hearing" and "vision"
+#      using HEARING HEARAID HEARWAID, VISION VISCORR VISWCORR.
+def create_hv(df):
 
+    # check if having required vars
+    for v in ['HEARING', 'HEARAID', 'HEARWAID', 'VISION', 'VISCORR', 'VISWCORR']:
+        if v not in df.columns :
+            print("Cannot create hearing/vision: Missing HEARING HEARAID HEARWAID, VISION VISCORR VISWCORR")
+            return df
+    
+    hearing=list()
+    vision=list()
+    for a, row in df.iterrows():
+        for var in ['HEARING', 'HEARAID', 'HEARWAID', 'VISION', 'VISCORR', 'VISWCORR']:
+            if isinstance(row[var], str):
+                # Convert the string representation of the list to an actual list
+                row[var] = eval(row[var])
+        
+        # timepoint vectors for each sample
+        h=list()
+        v=list()
 
+        for i in range(len(row['HEARING'])):
+            # classify hearing
+            if np.isnan(row['HEARING'][i]):
+                h.append(np.nan)
+            elif row['HEARING'][i]==1:
+                # normal hearing
+                h.append(0)
+            else:
+                # abnormal hearing without aid, check if aid helps
+                if np.isnan(row['HEARAID'][i]):
+                    # unknown aid presence
+                    if np.isnan(row['HEARWAID'][i]):
+                        h.append(2)
+                    elif row['HEARWAID'][i]==0:
+                        h.append(2)
+                    else: 
+                        h.append(1)
+                elif row['HEARAID'][i]==0:
+                    # no aid
+                    h.append(2)
+                else: 
+                    # has aid, check if helps
+                    if np.isnan(row['HEARWAID'][i]):
+                        h.append(2)
+                    elif row['HEARWAID'][i]==0:
+                        h.append(2)
+                    else: 
+                        h.append(1)
+
+            # classify vision
+            if np.isnan(row['VISION'][i]):
+                h.append(np.nan)
+            elif row['VISION'][i]==1:
+                # normal vision
+                h.append(0)
+            else:
+                # abnormal vision without aid, check if aid helps
+                if np.isnan(row['VISCORR'][i]):
+                    # unknown aid presence
+                    if np.isnan(row['VISWCORR'][i]):
+                        h.append(2)
+                    elif row['VISWCORR'][i]==0:
+                        h.append(2)
+                    else: 
+                        h.append(1)
+                elif row['VISCORR'][i]==0:
+                    # no aid
+                    h.append(2)
+                else: 
+                    # has aid, check if helps
+                    if np.isnan(row['VISWCORR'][i]):
+                        h.append(2)
+                    elif row['VISWCORR'][i]==0:
+                        h.append(2)
+                    else: 
+                        h.append(1)
+                
+        hearing.append(h)
+        vision.append(v)
+
+    # expand df with new vars
+    df['hearing']=hearing
+    df['vision']=vision
+    return df
