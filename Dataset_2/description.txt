@@ -1,0 +1,5 @@
+    
+Contains: 
+ -categorical longitudinal variables, BMI, GDS, and CDR imputation (no MMSE imputation).
+ -additional samples sliced from the 6-19 visits datasets in the new 5 visits dataset.
+ -hearing and vision. 
