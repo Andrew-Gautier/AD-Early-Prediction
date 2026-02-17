@@ -20,6 +20,33 @@ import seaborn as sns
 import os
 import joblib
 from imblearn.over_sampling import SMOTENC
+from preprocessing import fit_mmse_imputer, transform_mmse
+
+# Covariates used for MMSE iterative imputation (must be present in the raw DataFrame)
+MMSE_COVARIATES = ['EDUC', 'GDS', 'CDR', 'TOBAC30', 'BILLS', 'TAXES', 'SHOPPING',
+                   'GAMES', 'STOVE', 'MEALPREP', 'EVENTS', 'PAYATTN', 'REMDATES',
+                   'TRAVEL', 'hearing', 'vision']
+
+# Categorical feature names used for SMOTENC and encoding
+CATEGORICAL_COLS = ['SEX', 'NACCFAM', 'CVHATT', 'CVAFIB', 'DIABETES',
+                    'HYPERCHO', 'HYPERTEN', 'B12DEF', 'DEPD', 'ANX', 'NACCTBI', 'RACE']
+
+def _get_cat_indices(feature_names):
+    """Return column indices of categorical features within the feature array."""
+    return [i for i, f in enumerate(feature_names) if f in CATEGORICAL_COLS]
+
+def _apply_smotenc(X_train, y_train, cat_indices):
+    """Apply SMOTENC to oversample the minority class in the training set.
+    Returns (X_resampled, y_resampled). Falls back to original data if SMOTE fails."""
+    try:
+        min_class_count = int(np.bincount(y_train.astype(int)).min())
+        k = min(3, min_class_count - 1) if min_class_count > 1 else 1
+        sm = SMOTENC(categorical_features=cat_indices, k_neighbors=k, random_state=42)
+        X_res, y_res = sm.fit_resample(X_train, y_train)
+        return X_res, y_res
+    except Exception as e:
+        print(f"  SMOTENC failed ({e}); using original training data.")
+        return X_train, y_train
 
 # This is the classifer used for visits 2-6 classification scores and charts. 
 
@@ -244,11 +271,12 @@ def bootstrap_all_metrics_ci(
 
 # Preprocess the data
 def preprocess_data(df, progression_type):
-    # Create target variable
-    if progression_type == 'AD':
-        df['target'] = df.apply(create_target_variable_ad, axis=1)
-    elif progression_type == 'MCI':
-        df['target'] = df.apply(create_target_variable_mci, axis=1)
+    # Create target variable if not already present
+    if 'target' not in df.columns:
+        if progression_type == 'AD':
+            df['target'] = df.apply(create_target_variable_ad, axis=1)
+        elif progression_type == 'MCI':
+            df['target'] = df.apply(create_target_variable_mci, axis=1)
     
     # Get all available features (after create_delta_features transformation)
     all_features = [col for col in df.columns if col != 'target']
@@ -340,10 +368,7 @@ def split_dataset(data):
 # For the training of the best model with the best set of hyperparameters, prints out the whole performance report.
 def build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_names):
     
-    # Handle class imbalance
-    scale_pos_weight = (len(y_train) - sum(y_train)) / sum(y_train) if sum(y_train) > 0 else 1
-
-    # Build a model with the input hyperparameter values
+    # Build a model with the input hyperparameter values (no scale_pos_weight; using SMOTE instead)
     model = XGBClassifier(
         objective='binary:logistic',
         eval_metric='auc',
@@ -355,7 +380,6 @@ def build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_name
         colsample_bytree=model_dict['colsample_bytree'],
 
         random_state=42,
-        scale_pos_weight=scale_pos_weight
     )
     
     # Fit imputer/scaler on training set only (avoid leakage)
@@ -364,7 +388,12 @@ def build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_name
     X_train_proc = scaler.fit_transform(imputer.fit_transform(X_train))
     X_test_proc = scaler.transform(imputer.transform(X_test))
 
-    model.fit(X_train_proc, y_train)
+    # Apply SMOTENC on processed training data to handle class imbalance
+    cat_indices = _get_cat_indices(feature_names)
+    X_train_res, y_train_res = _apply_smotenc(X_train_proc, y_train, cat_indices)
+    print(f"SMOTE resampling: {len(y_train)} -> {len(y_train_res)} training samples")
+
+    model.fit(X_train_res, y_train_res)
     
     # Evaluate model
     y_pred = model.predict(X_test_proc)
@@ -386,7 +415,6 @@ def build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_name
         n_boot=1000,
         conf_level=0.95,
         random_state=42,
-        min_valid_auc=30,
         verbose=True,
     )
 
@@ -414,12 +442,9 @@ def build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_name
     return model, feature_names, imputer, scaler, summary
 
 # To train models for cross-validation. Returns only AUC score. Does not print out anything.
-def build_model(X_train, X_test, y_train, y_test, model_dict):
+def build_model(X_train, X_test, y_train, y_test, model_dict, feature_names):
     
-    # Handle class imbalance
-    scale_pos_weight = (len(y_train) - sum(y_train)) / sum(y_train) if sum(y_train) > 0 else 1
-
-    # Build a model with the input hyperparameter values
+    # Build a model with the input hyperparameter values (no scale_pos_weight; using SMOTE instead)
     model = XGBClassifier(
         objective='binary:logistic',
         eval_metric='auc',
@@ -431,7 +456,6 @@ def build_model(X_train, X_test, y_train, y_test, model_dict):
         colsample_bytree=model_dict['colsample_bytree'],
 
         random_state=42,
-        scale_pos_weight=scale_pos_weight
     )
     
     # Per-fold imputation/scaling fit on training fold only (avoid leakage)
@@ -440,7 +464,11 @@ def build_model(X_train, X_test, y_train, y_test, model_dict):
     X_train_proc = scaler.fit_transform(imputer.fit_transform(X_train))
     X_test_proc = scaler.transform(imputer.transform(X_test))
 
-    model.fit(X_train_proc, y_train)
+    # Apply SMOTENC on processed training fold to handle class imbalance
+    cat_indices = _get_cat_indices(feature_names)
+    X_train_res, y_train_res = _apply_smotenc(X_train_proc, y_train, cat_indices)
+
+    model.fit(X_train_res, y_train_res)
     
     # Evaluate model
     y_proba = model.predict_proba(X_test_proc)[:, 1]
@@ -450,7 +478,7 @@ def build_model(X_train, X_test, y_train, y_test, model_dict):
 # Perform grid search with the training dataset and the given parameter ranges.
 # Return the set of best hyperparameters and save cross-validation scores to the given csv path.
 # A helper method for train_best_model(...)
-def grid_search(x, y, param_grid, csv_path):
+def grid_search(x, y, param_grid, csv_path, feature_names):
     # a list to store hyperparameter values and cross validation scores
     scores = []
 
@@ -497,7 +525,7 @@ def grid_search(x, y, param_grid, csv_path):
                         }
                         # Train across folds
                         for i in range(n_splits):
-                            score_sum += build_model(list_x_train[i], list_x_test[i], list_y_train[i], list_y_test[i], model_dict)
+                            score_sum += build_model(list_x_train[i], list_x_test[i], list_y_train[i], list_y_test[i], model_dict, feature_names)
 
                         # record and update score
                         score = score_sum / n_splits
@@ -515,19 +543,73 @@ def grid_search(x, y, param_grid, csv_path):
     return best_hyperparameters
 
 # Input an unprocessed dataset, progression type for preprocessing, and the parameter ranges 
-#   to get a best performing model with the best set of hyperparameters found from grid-search.
+# to get a best performing model with the best set of hyperparameters found from grid-search.
 # Save cross-validation scores to the input new csv path.
 def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="saved_models", model_base_name=None, save_artifacts=True):
-    processed_df, scaler, imputer = preprocess_data(create_delta_features(dataset), progression_type)
-    feature_names = processed_df.drop(columns=['target']).columns.tolist()
+    
+    dataset = dataset.copy()
 
-    # first dataset splitting
-    X_train, X_test, y_train, y_test = split_dataset(processed_df)
+    # --- Step 1: Create target variable on the raw DataFrame (needed for stratified split) ---
+    if progression_type == 'AD':
+        dataset['target'] = dataset.apply(create_target_variable_ad, axis=1)
+    elif progression_type == 'MCI':
+        dataset['target'] = dataset.apply(create_target_variable_mci, axis=1)
 
-    # Get the best set of hyperparameter from grid search, and save a cross-validation scores csv to the given path
-    model_dict = grid_search(X_train, y_train, param_grid, csv_path)
+    # --- Step 2: Stratified train/test split on raw DataFrame indices ---
+    train_idx, test_idx = train_test_split(
+        dataset.index, test_size=0.2, random_state=42, stratify=dataset['target']
+    )
+    df_train_raw = dataset.loc[train_idx].copy()
+    df_test_raw = dataset.loc[test_idx].copy()
 
-    # print out a full report
+    # --- Step 3: MMSE imputation post-split (fit on train only) ---
+    # Check if MMSE column exists and has NaN values that need imputation
+    mmse_imputer_obj = None
+    if 'MMSE' in df_train_raw.columns:
+        mmse_has_nan = df_train_raw['MMSE'].astype(str).str.contains('nan', na=False).any()
+        if mmse_has_nan:
+            # Filter covariates to those actually present in the DataFrame
+            covariates = [c for c in MMSE_COVARIATES if c in df_train_raw.columns]
+            print(f"Fitting MMSE imputer on training set ({len(df_train_raw)} samples) with {len(covariates)} covariates...")
+            mmse_imputer_obj, df_train_raw = fit_mmse_imputer(df_train_raw, covariates)
+            df_test_raw = transform_mmse(df_test_raw, covariates, mmse_imputer_obj)
+            print("MMSE imputation complete (train fit, test transformed).")
+        else:
+            print("No MMSE NaN values found; skipping MMSE imputation.")
+
+    # --- Step 4: Feature engineering + preprocessing on each split independently ---
+    # Drop the target before delta features (it will be re-created by preprocess_data)
+    y_train_target = df_train_raw['target'].values
+    y_test_target = df_test_raw['target'].values
+    df_train_raw = df_train_raw.drop(columns=['target'])
+    df_test_raw = df_test_raw.drop(columns=['target'])
+
+    df_train_feat = create_delta_features(df_train_raw)
+    df_test_feat = create_delta_features(df_test_raw)
+
+    # Re-attach target for preprocess_data
+    df_train_feat['target'] = y_train_target
+    df_test_feat['target'] = y_test_target
+
+    processed_train, _, _ = preprocess_data(df_train_feat, progression_type)
+    processed_test, _, _ = preprocess_data(df_test_feat, progression_type)
+
+    # Align columns (test may be missing some columns that train has)
+    feature_names = [c for c in processed_train.columns if c != 'target']
+    for col in feature_names:
+        if col not in processed_test.columns:
+            processed_test[col] = np.nan
+    processed_test = processed_test[feature_names + ['target']]
+
+    X_train = processed_train.drop(columns=['target']).values
+    X_test = processed_test.drop(columns=['target']).values
+    y_train = processed_train['target'].values
+    y_test = processed_test['target'].values
+
+    # --- Step 5: Grid search (uses SMOTE inside each CV fold) ---
+    model_dict = grid_search(X_train, y_train, param_grid, csv_path, feature_names)
+
+    # --- Step 6: Final model with full report ---
     model, columns, imputer, scaler, summary = build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_names)
 
     # Attach feature names for downstream use (e.g., lead time notebook)
@@ -557,14 +639,22 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
         print(f"- Scaler:  {scaler_path}")
         print(f"- Imputer: {imputer_path}")
 
+        # Also save the MMSE imputer if it was used
+        if mmse_imputer_obj is not None:
+            mmse_imp_path = os.path.join(save_dir, f"{base}_mmse_imputer_{progression_type}.pkl")
+            joblib.dump(mmse_imputer_obj, mmse_imp_path)
+            print(f"- MMSE Imputer: {mmse_imp_path}")
+
         # Save a textual report
         report_path = os.path.join(save_dir, f"{base}_report_{progression_type}.txt")
         with open(report_path, "w") as f:
             f.write(f"Dataset base: {base}\n")
             f.write(f"Progression type: {progression_type}\n")
+            f.write(f"MMSE imputation: {'post-split (train-fit)' if mmse_imputer_obj else 'not needed'}\n")
+            f.write(f"Class balancing: SMOTENC (replaces scale_pos_weight)\n")
             f.write("Best hyperparameters:\n")
             for k, v in model.get_params().items():
-                if k in ["n_estimators", "max_depth", "learning_rate", "subsample", "colsample_bytree", "scale_pos_weight", "random_state", "objective", "eval_metric"]:
+                if k in ["n_estimators", "max_depth", "learning_rate", "subsample", "colsample_bytree", "random_state", "objective", "eval_metric"]:
                     f.write(f"  {k}: {v}\n")
             f.write("\nClassification Report:\n")
             f.write(summary["classification_report"] + "\n")
@@ -572,8 +662,7 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
             bm = summary["bootstrap_metrics"]
             f.write(f"Bootstrap 95% CI (n=1000, valid_samples={bm['valid_samples']}):\n")
             f.write(f"- Accuracy: {bm['accuracy'][0]:.3f} (CI: {bm['accuracy'][1][0]:.3f}, {bm['accuracy'][1][1]:.3f})\n")
-            f.write(f"- Precision (macro): {bm['precision_macro'][0]:.3f} (CI: {bm['precision_macro'][1][0]:.3f}, {bm['precision_macro'][1][1]:.3f})\n")\
-            
+            f.write(f"- Precision (macro): {bm['precision_macro'][0]:.3f} (CI: {bm['precision_macro'][1][0]:.3f}, {bm['precision_macro'][1][1]:.3f})\n")
             f.write(f"- Recall (macro): {bm['recall_macro'][0]:.3f} (CI: {bm['recall_macro'][1][0]:.3f}, {bm['recall_macro'][1][1]:.3f})\n")
             f.write(f"- F1 (macro): {bm['f1_macro'][0]:.3f} (CI: {bm['f1_macro'][1][0]:.3f}, {bm['f1_macro'][1][1]:.3f})\n")
             auc_lo, auc_hi = bm['auc'][1]
