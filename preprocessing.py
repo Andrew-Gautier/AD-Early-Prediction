@@ -100,51 +100,62 @@ def convert_to_real_nan(row):
         return row  # If it can't be converted, return the original
     
 def impute_mmse(df, covariates):
-    # Convert MMSE strings to lists of floats
+    """Original convenience wrapper: fits and transforms in one call (use only pre-split or for exploration)."""
+    mmse_imputer, df_out = fit_mmse_imputer(df, covariates)
+    return df_out
+
+def _build_mmse_matrix(df, covariates):
+    """Helper: build the combined MMSE + covariate matrix and return (mmse_matrix, combined_data, n_mmse_cols)."""
     mmse_lists = df['MMSE'].apply(convert_to_real_nan)
-    
-    # Create a matrix of MMSE values (subjects x timepoints)
     mmse_matrix = np.array([x for x in mmse_lists])
     covariate_matrix = []
     for col in covariates:
-        # Check if the column contains string representations of lists
         if df[col].dtype == 'object' and str(df[col].iloc[0]).startswith('['):
-            # Convert list-type covariates
             col_data = df[col].apply(convert_to_real_nan)
-            # For list columns, we'll take all timepoints as separate covariates
             col_matrix = np.array([x for x in col_data])
             covariate_matrix.append(col_matrix)
         else:
-            # For non-list columns, reshape to 2D array
             col_matrix = df[col].values.reshape(-1, 1)
             covariate_matrix.append(col_matrix)
-    # Combine all covariate matrices horizontally
-    covariate_data = np.hstack([x if len(x.shape) > 1 else x.reshape(-1, 1) for x in covariate_matrix])   
-    # Initialize imputer
+    covariate_data = np.hstack([x if len(x.shape) > 1 else x.reshape(-1, 1) for x in covariate_matrix])
+    combined_data = np.hstack([mmse_matrix, covariate_data])
+    return mmse_matrix, combined_data, mmse_matrix.shape[1]
+
+def _process_mmse_values(imputed_mmse):
+    """Post-process imputed MMSE: cap at 30.0, round to 2 decimals, convert to float lists."""
+    processed = []
+    for row in imputed_mmse:
+        processed.append([min(round(float(val), 2), 30.0) for val in row])
+    return processed
+
+def fit_mmse_imputer(df, covariates):
+    """Fit an IterativeImputer on df's MMSE + covariates and return (fitted_imputer, imputed_df).
+    
+    Use this on the TRAINING set only. Then call transform_mmse() on the test set.
+    """
+    mmse_matrix, combined_data, n_mmse_cols = _build_mmse_matrix(df, covariates)
     imputer = IterativeImputer(
         estimator=BayesianRidge(),
         max_iter=20,
         random_state=42,
         initial_strategy='mean'
     )
-    # Combine MMSE and covariates for imputation
-    combined_data = np.hstack([mmse_matrix, covariate_data])
-    # Perform imputation
     imputed_data = imputer.fit_transform(combined_data)
-    # Extract imputed MMSE values
-    imputed_mmse = imputed_data[:, :mmse_matrix.shape[1]]
-    # Process imputed values:
-    # 1. Cap values at 30.0
-    # 2. Round to 2 decimal places
-    # 3. Convert to regular float lists
-    processed_mmse = []
-    for row in imputed_mmse:
-        processed_row = [min(round(float(val), 2), 30.0) for val in row]
-        processed_mmse.append(processed_row)
+    imputed_mmse = imputed_data[:, :n_mmse_cols]
+    df = df.copy()
+    df['MMSE'] = _process_mmse_values(imputed_mmse)
+    return imputer, df
+
+def transform_mmse(df, covariates, fitted_imputer):
+    """Apply a previously fitted MMSE imputer to a new DataFrame (e.g. test set).
     
-    # Update the DataFrame with processed imputed values
-    df['MMSE'] = processed_mmse
-    
+    The imputer must have been fit via fit_mmse_imputer() on the training set.
+    """
+    mmse_matrix, combined_data, n_mmse_cols = _build_mmse_matrix(df, covariates)
+    imputed_data = fitted_imputer.transform(combined_data)
+    imputed_mmse = imputed_data[:, :n_mmse_cols]
+    df = df.copy()
+    df['MMSE'] = _process_mmse_values(imputed_mmse)
     return df
 
 # Manually impute a single vector of categorical longitudinal variables
