@@ -1,0 +1,5 @@
+Dataset_2_no_reverter:
+    For CN/MCI, dropping those labeled as 1-Progressor but diagnosed as 0-CN in the most recent visit.
+    For MCI/AD, dropping those labeled as 1-Progressor but diagnosed as 1-MCI in the most recent visit.
+
+    Saving those dropped samples separately in the "reverter" folder in the same dataset.
