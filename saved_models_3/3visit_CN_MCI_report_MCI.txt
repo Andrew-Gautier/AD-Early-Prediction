@@ -1,0 +1,32 @@
+Dataset base: 3visit_CN_MCI
+Progression type: MCI
+MMSE imputation: not needed
+Class balancing: SMOTENC (replaces scale_pos_weight)
+Best hyperparameters:
+  objective: binary:logistic
+  colsample_bytree: 0.8
+  eval_metric: auc
+  learning_rate: 0.01
+  max_depth: 5
+  n_estimators: 300
+  random_state: 42
+  subsample: 1.0
+
+Classification Report:
+              precision    recall  f1-score   support
+
+           0       1.00      0.96      0.98       115
+           1       0.58      1.00      0.74         7
+
+    accuracy                           0.96       122
+   macro avg       0.79      0.98      0.86       122
+weighted avg       0.98      0.96      0.96       122
+
+
+Base ROC AUC: 0.9739
+Bootstrap 95% CI (n=1000, valid_samples=1000/1000):
+- Accuracy: 0.959 (CI: 0.926, 0.992)
+- Precision (macro): 0.792 (CI: 0.643, 0.938)
+- Recall (macro): 0.978 (CI: 0.959, 0.996)
+- F1 (macro): 0.857 (CI: 0.700, 0.962)
+- ROC AUC: 0.974 (CI: 0.940, 0.995)
