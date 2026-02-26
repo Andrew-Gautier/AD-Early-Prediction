@@ -37,7 +37,103 @@ def progressor_class(file_path):
     print (f"Stable CN in {file_path} : {non_progressors.sum() - mci_count}")
     print (f"CN to MCI in {file_path} : {cn_to_mci}")
     print (f"MCI to AD in {file_path} : {mci_to_ad}")
-    
+
+CODINGS = {
+    "standard": {
+        "name": "standard",
+        "rules": [
+            # (label, condition_fn)  — evaluated top-to-bottom, first match wins
+            ("CN",      lambda row: row["NORMCOG"] == 1),
+            ("AD",      lambda row: row["NACCALZP"] in (1, 2)),
+            ("MCI",     lambda row: row["NACCUDSD"] == 3),
+            ("Unknown", lambda row: True),   # catch-all
+        ]
+    },
+    "cn_mci_dementia": {
+        # Alternative: allows for
+        "name": "cn_mci_dementia",
+        "rules": [
+            ("CN",      lambda row: row["NORMCOG"] == 1),
+            ("MCI",      lambda row: row["NACCUDSD"] == 3),
+            ("DEM",     lambda row: row["NACCUDSD"] == 4),
+            ("Unknown", lambda row: True),
+        ]
+    },
+
+}
+
+# ── 2. Core labelling function ─────────────────────────────────────────────
+def label_visit(row: pd.Series, rules: list) -> str:
+    """Apply ordered rules to a single visit row, return first matching label."""
+    for label, condition in rules:
+        if condition(row):
+            return label
+    return "Unknown"
+
+# ── 3. Grouping function — coding-agnostic ─────────────────────────────────
+def build_response_sequences(
+    df: pd.DataFrame,
+    id_col: str = "NACCID",
+    coding_key: str = "standard",
+    codings: dict = CODINGS,
+    save_csv: str | None = None,
+) -> pd.DataFrame:
+    rules = codings[coding_key]["rules"]
+
+    sequences = (
+        df.groupby(id_col)
+        .apply(lambda grp: [label_visit(row, rules) for _, row in grp.iterrows()])
+        .reset_index()
+    )
+    sequences.columns = [id_col, "Responses"]
+    sequences["Coding"] = coding_key
+
+    # Add occurrence count and sort by it descending for readable CSV output
+    counts = sequences["Responses"].apply(tuple).map(
+        sequences["Responses"].apply(tuple).value_counts()
+    )
+    sequences["Count"] = counts
+    sequences = sequences.sort_values("Count", ascending=False).reset_index(drop=True)
+
+    if save_csv:
+        sequences.to_csv(save_csv, index=False)
+        print(f"Saved → {save_csv}")
+
+    return sequences
+
+def summarise_sequences(
+    sequences_df: pd.DataFrame,
+    save_csv: str | None = None,
+) -> pd.DataFrame:
+    """
+    Collapse a response_sequences DataFrame down to one row per unique pattern,
+    sorted by frequency descending.
+
+    Parameters
+    ----------
+    sequences_df : output of build_response_sequences
+    save_csv     : optional path to save the summary
+
+    Returns
+    -------
+    DataFrame with columns [Responses, Count, Coding, Pct]
+    """
+    summary = (
+        sequences_df
+        .groupby(["Responses", "Coding"], as_index=False)["Count"]
+        .first()                          # Count is already per-pattern
+        .sort_values("Count", ascending=False)
+        .reset_index(drop=True)
+    )
+    total = summary["Count"].sum()
+    summary["Pct"] = (summary["Count"] / total * 100).round(2)
+
+    if save_csv:
+        summary.to_csv(save_csv, index=False)
+        print(f"Saved → {save_csv}  ({len(summary)} unique patterns)")
+
+    return summary
+
 def combine_ids_to_one_row(folder_path):
     for filename in os.listdir(folder_path):
         if filename.endswith(".csv"):
