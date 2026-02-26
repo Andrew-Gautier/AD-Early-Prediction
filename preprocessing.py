@@ -105,23 +105,16 @@ def summarise_sequences(
     sequences_df: pd.DataFrame,
     save_csv: str | None = None,
 ) -> pd.DataFrame:
-    """
-    Collapse a response_sequences DataFrame down to one row per unique pattern,
-    sorted by frequency descending.
+    df = sequences_df.copy()
+    # Convert lists to tuples so they can be used as groupby keys
+    df["Responses"] = df["Responses"].apply(
+        lambda x: tuple(x) if isinstance(x, list) else x
+    )
 
-    Parameters
-    ----------
-    sequences_df : output of build_response_sequences
-    save_csv     : optional path to save the summary
-
-    Returns
-    -------
-    DataFrame with columns [Responses, Count, Coding, Pct]
-    """
     summary = (
-        sequences_df
+        df
         .groupby(["Responses", "Coding"], as_index=False)["Count"]
-        .first()                          # Count is already per-pattern
+        .first()
         .sort_values("Count", ascending=False)
         .reset_index(drop=True)
     )
