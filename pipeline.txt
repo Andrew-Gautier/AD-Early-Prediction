@@ -1,0 +1,9 @@
+I want to create a preprocessing pipeline to create multiple raw cohort datasets for testing out different imputation strategies and different models with. 
+The dataset is in 'investigator_ftldlbd_nacc72.csv', and the keys of unique ids (patients) is in unique_idsv2.txt. 
+
+The preprocessing.py file has many functions that can be reused, but the feature selection and recoding took place in preprocessing.ipynb previously. The end result of the pipeline should produce a folder with csv for parsed for each visit group, plus a group of reverters (who will not be included in the model, but will be analyzed.)
+
+Everything should be properly recoded to nan, in the final dataset, and keep the combined up to 10 visit group. All people below the age of 50 should be dropped. 
+In the raw cohorts the patients can be combined into how many visits they are. 
+
+Look at the features in the 2visit_CN_MCI.csv to get a comprehebsive list of features that should be in the dataframe. Do 2-10 visits. Make a callable pipeline that I can test out on the full dataset with clear concise, extendable code. Make sure that the reverters are properly dropped as well but perserved in a separate file. 
