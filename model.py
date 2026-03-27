@@ -18,8 +18,14 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 # Removed pauc partial AUC dependency; using manual bootstrap for full ROC AUC CI
 import os
+import itertools
 import joblib
 from imblearn.over_sampling import SMOTENC
+try:
+    from tqdm import tqdm
+except ImportError:
+    def tqdm(iterable, **kwargs):
+        return iterable
 from preprocessing import fit_mmse_imputer, transform_mmse
 
 # Covariates used for MMSE iterative imputation (must be present in the raw DataFrame)
@@ -429,12 +435,12 @@ def build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_name
     auc_pt, (auc_lo, auc_hi) = metrics["auc"]
 
     print(f"\nBootstrap 95% CI (n=1000, valid_samples={metrics['valid_samples']}):")
-    print(f"- Accuracy: {acc_pt:.3f} (CI: {acc_lo:.3f}, {acc_hi:.3f})")
-    print(f"- Precision (macro): {prec_pt:.3f} (CI: {prec_lo:.3f}, {prec_hi:.3f})")
-    print(f"- Recall (macro): {rec_pt:.3f} (CI: {rec_lo:.3f}, {rec_hi:.3f})")
-    print(f"- F1 (macro): {f1_pt:.3f} (CI: {f1_lo:.3f}, {f1_hi:.3f})")
+    print(f"- Accuracy: {acc_pt:.3f} (CI: {acc_lo:.3f}, {acc_hi:.3f}) range={acc_hi - acc_lo:.3f}")
+    print(f"- Precision (macro): {prec_pt:.3f} (CI: {prec_lo:.3f}, {prec_hi:.3f}) range={prec_hi - prec_lo:.3f}")
+    print(f"- Recall (macro): {rec_pt:.3f} (CI: {rec_lo:.3f}, {rec_hi:.3f}) range={rec_hi - rec_lo:.3f}")
+    print(f"- F1 (macro): {f1_pt:.3f} (CI: {f1_lo:.3f}, {f1_hi:.3f}) range={f1_hi - f1_lo:.3f}")
     if not np.isnan(auc_lo):
-        print(f"- ROC AUC: {auc_pt:.3f} (CI: {auc_lo:.3f}, {auc_hi:.3f})")
+        print(f"- ROC AUC: {auc_pt:.3f} (CI: {auc_lo:.3f}, {auc_hi:.3f}) range={auc_hi - auc_lo:.3f}")
     else:
         print(f"- ROC AUC: {auc_pt:.3f} (CI unavailable; too few valid resamples)")
 
@@ -501,13 +507,13 @@ def grid_search(x, y, param_grid, csv_path, feature_names, cv_method='skf', use_
     # ── LOOCV branch ────────────────────────────────────────────────────────────
     if cv_method == 'loocv':
         n_samples = len(y_arr)
-        print(f"Using Leave-One-Out CV ({n_samples} iterations, use_smote={use_smote})")
+        combo_keys = ['n_estimators', 'max_depth', 'learning_rate', 'subsample', 'colsample_bytree']
+        all_combos = list(itertools.product(*(param_grid[k] for k in combo_keys)))
+        total_combos = len(all_combos)
+        print(f"Using Leave-One-Out CV ({n_samples} iterations x {total_combos} combos, use_smote={use_smote})")
 
-        for n_estimators in param_grid['n_estimators']:
-            for max_depth in param_grid['max_depth']:
-                for learning_rate in param_grid['learning_rate']:
-                    for subsample in param_grid['subsample']:
-                        for colsample_bytree in param_grid['colsample_bytree']:
+        for combo in tqdm(all_combos, desc="LOOCV grid search", unit="combo"):
+                            n_estimators, max_depth, learning_rate, subsample, colsample_bytree = combo
                             model_dict = {
                                 'n_estimators': n_estimators,
                                 'max_depth': max_depth,
@@ -599,11 +605,13 @@ def grid_search(x, y, param_grid, csv_path, feature_names, cv_method='skf', use_
             list_x_test.append(x[test_ind])
             list_y_test.append(y_arr[test_ind])
 
-        for n_estimators in param_grid['n_estimators']:
-            for max_depth in param_grid['max_depth']:
-                for learning_rate in param_grid['learning_rate']:
-                    for subsample in param_grid['subsample']:
-                        for colsample_bytree in param_grid['colsample_bytree']:
+        combo_keys = ['n_estimators', 'max_depth', 'learning_rate', 'subsample', 'colsample_bytree']
+        all_combos = list(itertools.product(*(param_grid[k] for k in combo_keys)))
+        total_combos = len(all_combos)
+        print(f"Grid search: {total_combos} hyperparameter combinations")
+
+        for combo in tqdm(all_combos, desc="SKF grid search", unit="combo"):
+                            n_estimators, max_depth, learning_rate, subsample, colsample_bytree = combo
                             score_sum = 0
                             model_dict = {
                                 'n_estimators': n_estimators,
@@ -755,13 +763,13 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
             f.write(f"\nBase ROC AUC: {summary['base_auc']:.4f}\n")
             bm = summary["bootstrap_metrics"]
             f.write(f"Bootstrap 95% CI (n=1000, valid_samples={bm['valid_samples']}):\n")
-            f.write(f"- Accuracy: {bm['accuracy'][0]:.3f} (CI: {bm['accuracy'][1][0]:.3f}, {bm['accuracy'][1][1]:.3f})\n")
-            f.write(f"- Precision (macro): {bm['precision_macro'][0]:.3f} (CI: {bm['precision_macro'][1][0]:.3f}, {bm['precision_macro'][1][1]:.3f})\n")
-            f.write(f"- Recall (macro): {bm['recall_macro'][0]:.3f} (CI: {bm['recall_macro'][1][0]:.3f}, {bm['recall_macro'][1][1]:.3f})\n")
-            f.write(f"- F1 (macro): {bm['f1_macro'][0]:.3f} (CI: {bm['f1_macro'][1][0]:.3f}, {bm['f1_macro'][1][1]:.3f})\n")
+            f.write(f"- Accuracy: {bm['accuracy'][0]:.3f} (CI: {bm['accuracy'][1][0]:.3f}, {bm['accuracy'][1][1]:.3f}) range={bm['accuracy'][1][1] - bm['accuracy'][1][0]:.3f}\n")
+            f.write(f"- Precision (macro): {bm['precision_macro'][0]:.3f} (CI: {bm['precision_macro'][1][0]:.3f}, {bm['precision_macro'][1][1]:.3f}) range={bm['precision_macro'][1][1] - bm['precision_macro'][1][0]:.3f}\n")
+            f.write(f"- Recall (macro): {bm['recall_macro'][0]:.3f} (CI: {bm['recall_macro'][1][0]:.3f}, {bm['recall_macro'][1][1]:.3f}) range={bm['recall_macro'][1][1] - bm['recall_macro'][1][0]:.3f}\n")
+            f.write(f"- F1 (macro): {bm['f1_macro'][0]:.3f} (CI: {bm['f1_macro'][1][0]:.3f}, {bm['f1_macro'][1][1]:.3f}) range={bm['f1_macro'][1][1] - bm['f1_macro'][1][0]:.3f}\n")
             auc_lo, auc_hi = bm['auc'][1]
             if not np.isnan(auc_lo):
-                f.write(f"- ROC AUC: {bm['auc'][0]:.3f} (CI: {auc_lo:.3f}, {auc_hi:.3f})\n")
+                f.write(f"- ROC AUC: {bm['auc'][0]:.3f} (CI: {auc_lo:.3f}, {auc_hi:.3f}) range={auc_hi - auc_lo:.3f}\n")
             else:
                 f.write(f"- ROC AUC: {bm['auc'][0]:.3f} (CI unavailable; too few valid resamples)\n")
         print(f"- Report:  {report_path}")
