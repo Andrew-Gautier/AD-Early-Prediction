@@ -20,6 +20,7 @@ import seaborn as sns
 import os
 import itertools
 import joblib
+from joblib import Parallel, delayed
 from imblearn.over_sampling import SMOTENC
 try:
     from tqdm import tqdm
@@ -452,7 +453,7 @@ def build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_name
     return model, feature_names, imputer, scaler, summary
 
 # To train models for cross-validation. Returns only AUC score. Does not print out anything.
-def build_model(X_train, X_test, y_train, y_test, model_dict, feature_names, use_smote=True):
+def build_model(X_train, X_test, y_train, y_test, model_dict, feature_names, use_smote=True, xgb_n_jobs=None):
     
     # Build a model with the input hyperparameter values (no scale_pos_weight; using SMOTE instead)
     model = XGBClassifier(
@@ -465,6 +466,7 @@ def build_model(X_train, X_test, y_train, y_test, model_dict, feature_names, use
         subsample=model_dict['subsample'],
         colsample_bytree=model_dict['colsample_bytree'],
 
+        n_jobs=xgb_n_jobs,
         random_state=42,
     )
     
@@ -488,6 +490,79 @@ def build_model(X_train, X_test, y_train, y_test, model_dict, feature_names, use
 
     return roc_auc_score(y_test, y_proba)
 
+def _eval_loocv_combo(combo, x, y_arr, n_samples, feature_names, use_smote):
+    """Evaluate one hyperparameter combo across all LOO iterations. Returns result tuple."""
+    n_estimators, max_depth, learning_rate, subsample, colsample_bytree = combo
+    loo_scores = []
+    for i in range(n_samples):
+        mask = np.ones(n_samples, dtype=bool)
+        mask[i] = False
+        X_loo_train = x[mask]
+        y_loo_train = y_arr[mask]
+        X_loo_test  = x[~mask]
+        y_loo_test  = y_arr[~mask]
+
+        if len(np.unique(y_loo_test)) < 2:
+            pass
+
+        imputer_loo = SimpleImputer(strategy='mean')
+        scaler_loo  = StandardScaler()
+        X_tr_proc = scaler_loo.fit_transform(imputer_loo.fit_transform(X_loo_train))
+        X_te_proc = scaler_loo.transform(imputer_loo.transform(X_loo_test))
+
+        if use_smote:
+            cat_indices = _get_cat_indices(feature_names)
+            X_tr_res, y_tr_res = _apply_smotenc(X_tr_proc, y_loo_train, cat_indices)
+        else:
+            X_tr_res, y_tr_res = X_tr_proc, y_loo_train
+
+        clf = XGBClassifier(
+            objective='binary:logistic',
+            eval_metric='auc',
+            n_estimators=n_estimators,
+            max_depth=max_depth,
+            learning_rate=learning_rate,
+            subsample=subsample,
+            colsample_bytree=colsample_bytree,
+            n_jobs=1,
+            random_state=42,
+        )
+        clf.fit(X_tr_res, y_tr_res)
+        y_proba = clf.predict_proba(X_te_proc)[:, 1]
+        loo_scores.append((int(y_loo_test[0]), float(y_proba[0])))
+
+    y_true_all  = np.array([s[0] for s in loo_scores])
+    y_score_all = np.array([s[1] for s in loo_scores])
+    try:
+        score = roc_auc_score(y_true_all, y_score_all)
+    except Exception:
+        score = 0.0
+
+    return (n_estimators, max_depth, learning_rate, subsample, colsample_bytree, score)
+
+
+def _eval_skf_combo(combo, list_x_train, list_x_test, list_y_train, list_y_test, n_splits, feature_names, use_smote):
+    """Evaluate one hyperparameter combo across K folds. Returns result tuple."""
+    n_estimators, max_depth, learning_rate, subsample, colsample_bytree = combo
+    model_dict = {
+        'n_estimators': n_estimators,
+        'max_depth': max_depth,
+        'learning_rate': learning_rate,
+        'subsample': subsample,
+        'colsample_bytree': colsample_bytree,
+    }
+    score_sum = 0
+    for i in range(n_splits):
+        score_sum += build_model(
+            list_x_train[i], list_x_test[i],
+            list_y_train[i], list_y_test[i],
+            model_dict, feature_names,
+            use_smote=use_smote, xgb_n_jobs=1,
+        )
+    score = score_sum / n_splits
+    return (n_estimators, max_depth, learning_rate, subsample, colsample_bytree, score)
+
+
 # Perform grid search with the training dataset and the given parameter ranges.
 # Return the set of best hyperparameters and save cross-validation scores to the given csv path.
 # A helper method for train_best_model(...)
@@ -495,89 +570,33 @@ def build_model(X_train, X_test, y_train, y_test, model_dict, feature_names, use
 # cv_method : 'skf'   → StratifiedKFold (default)
 #             'loocv' → Leave-One-Out CV
 # use_smote : whether to oversample the minority class inside each CV fold/iteration
-def grid_search(x, y, param_grid, csv_path, feature_names, cv_method='skf', use_smote=True):
-    # a list to store hyperparameter values and cross validation scores
-    scores = []
-
+# n_jobs    : number of parallel workers for evaluating hyperparameter combos (1 = serial)
+def grid_search(x, y, param_grid, csv_path, feature_names, cv_method='skf', use_smote=True, n_jobs=1):
     best_hyperparameters = None
     best_score = 0
 
     y_arr = np.array(y)
+    combo_keys = ['n_estimators', 'max_depth', 'learning_rate', 'subsample', 'colsample_bytree']
+    all_combos = list(itertools.product(*(param_grid[k] for k in combo_keys)))
+    total_combos = len(all_combos)
 
     # ── LOOCV branch ────────────────────────────────────────────────────────────
     if cv_method == 'loocv':
         n_samples = len(y_arr)
-        combo_keys = ['n_estimators', 'max_depth', 'learning_rate', 'subsample', 'colsample_bytree']
-        all_combos = list(itertools.product(*(param_grid[k] for k in combo_keys)))
-        total_combos = len(all_combos)
-        print(f"Using Leave-One-Out CV ({n_samples} iterations x {total_combos} combos, use_smote={use_smote})")
+        print(f"Using Leave-One-Out CV ({n_samples} iterations x {total_combos} combos, use_smote={use_smote}, n_jobs={n_jobs})")
 
-        for combo in tqdm(all_combos, desc="LOOCV grid search", unit="combo"):
-                            n_estimators, max_depth, learning_rate, subsample, colsample_bytree = combo
-                            model_dict = {
-                                'n_estimators': n_estimators,
-                                'max_depth': max_depth,
-                                'learning_rate': learning_rate,
-                                'subsample': subsample,
-                                'colsample_bytree': colsample_bytree,
-                            }
-                            loo_scores = []
-                            for i in range(n_samples):
-                                # Hold out sample i
-                                mask = np.ones(n_samples, dtype=bool)
-                                mask[i] = False
-                                X_loo_train = x[mask]
-                                y_loo_train = y_arr[mask]
-                                X_loo_test  = x[~mask]   # shape (1, n_features)
-                                y_loo_test  = y_arr[~mask]
-
-                                # Skip fold if held-out label is the only member of its class
-                                # (can't compute AUC with a single-class test set)
-                                if len(np.unique(y_loo_test)) < 2:
-                                    # Single sample — just record predicted proba vs true label;
-                                    # we'll handle AUC collection outside the fold
-                                    pass
-
-                                # Fit imputer/scaler on the LOO training set only
-                                imputer_loo = SimpleImputer(strategy='mean')
-                                scaler_loo  = StandardScaler()
-                                X_tr_proc = scaler_loo.fit_transform(imputer_loo.fit_transform(X_loo_train))
-                                X_te_proc = scaler_loo.transform(imputer_loo.transform(X_loo_test))
-
-                                # Optionally oversample minority class — ONLY within the training set
-                                if use_smote:
-                                    cat_indices = _get_cat_indices(feature_names)
-                                    X_tr_res, y_tr_res = _apply_smotenc(X_tr_proc, y_loo_train, cat_indices)
-                                else:
-                                    X_tr_res, y_tr_res = X_tr_proc, y_loo_train
-
-                                clf = XGBClassifier(
-                                    objective='binary:logistic',
-                                    eval_metric='auc',
-                                    n_estimators=n_estimators,
-                                    max_depth=max_depth,
-                                    learning_rate=learning_rate,
-                                    subsample=subsample,
-                                    colsample_bytree=colsample_bytree,
-                                    random_state=42,
-                                )
-                                clf.fit(X_tr_res, y_tr_res)
-                                y_proba = clf.predict_proba(X_te_proc)[:, 1]
-                                # Store (true_label, predicted_proba) for global AUC
-                                loo_scores.append((int(y_loo_test[0]), float(y_proba[0])))
-
-                            # Compute AUC over all LOO predictions
-                            y_true_all  = np.array([s[0] for s in loo_scores])
-                            y_score_all = np.array([s[1] for s in loo_scores])
-                            try:
-                                score = roc_auc_score(y_true_all, y_score_all)
-                            except Exception:
-                                score = 0.0
-
-                            scores.append([n_estimators, max_depth, learning_rate, subsample, colsample_bytree, score])
-                            if score > best_score:
-                                best_score = score
-                                best_hyperparameters = model_dict
+        results = Parallel(n_jobs=n_jobs, return_as='generator')(
+            delayed(_eval_loocv_combo)(combo, x, y_arr, n_samples, feature_names, use_smote)
+            for combo in all_combos
+        )
+        scores = []
+        with tqdm(total=total_combos, desc="LOOCV grid search", unit="combo") as pbar:
+            for result in results:
+                scores.append(list(result))
+                if result[5] > best_score:
+                    best_score = result[5]
+                    best_hyperparameters = dict(zip(combo_keys, result[:5]))
+                pbar.update(1)
 
     # ── StratifiedKFold branch ───────────────────────────────────────────────────
     else:
@@ -599,39 +618,26 @@ def grid_search(x, y, param_grid, csv_path, feature_names, cv_method='skf', use_
 
         skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
         for i, (train_ind, test_ind) in enumerate(skf.split(x, y_arr)):
-            # store folds of training and testing dataset in lists
             list_x_train.append(x[train_ind])
             list_y_train.append(y_arr[train_ind])
             list_x_test.append(x[test_ind])
             list_y_test.append(y_arr[test_ind])
 
-        combo_keys = ['n_estimators', 'max_depth', 'learning_rate', 'subsample', 'colsample_bytree']
-        all_combos = list(itertools.product(*(param_grid[k] for k in combo_keys)))
-        total_combos = len(all_combos)
-        print(f"Grid search: {total_combos} hyperparameter combinations")
+        print(f"Grid search: {total_combos} hyperparameter combinations (n_jobs={n_jobs})")
 
-        for combo in tqdm(all_combos, desc="SKF grid search", unit="combo"):
-                            n_estimators, max_depth, learning_rate, subsample, colsample_bytree = combo
-                            score_sum = 0
-                            model_dict = {
-                                'n_estimators': n_estimators,
-                                'max_depth': max_depth,
-                                'learning_rate': learning_rate,
-                                'subsample': subsample,
-                                'colsample_bytree': colsample_bytree
-                            }
-                            # Train across folds
-                            for i in range(n_splits):
-                                score_sum += build_model(list_x_train[i], list_x_test[i], list_y_train[i], list_y_test[i], model_dict, feature_names, use_smote=use_smote)
+        results = Parallel(n_jobs=n_jobs, return_as='generator')(
+            delayed(_eval_skf_combo)(combo, list_x_train, list_x_test, list_y_train, list_y_test, n_splits, feature_names, use_smote)
+            for combo in all_combos
+        )
+        scores = []
+        with tqdm(total=total_combos, desc="SKF grid search", unit="combo") as pbar:
+            for result in results:
+                scores.append(list(result))
+                if result[5] > best_score:
+                    best_score = result[5]
+                    best_hyperparameters = dict(zip(combo_keys, result[:5]))
+                pbar.update(1)
 
-                            # record and update score
-                            score = score_sum / n_splits
-                            scores.append([n_estimators, max_depth, learning_rate, subsample, colsample_bytree, score])
-
-                            if (score > best_score):
-                                best_score = score
-                                best_hyperparameters = model_dict
-                        
     # ensure directory exists and save the cross validations scores as csv
     dirn = os.path.dirname(csv_path)
     if dirn:
@@ -646,7 +652,7 @@ def grid_search(x, y, param_grid, csv_path, feature_names, cv_method='skf', use_
 # cv_method  : 'skf'   → StratifiedKFold grid search (default)
 #              'loocv' → Leave-One-Out CV grid search
 # use_smote  : whether to apply SMOTENC inside each CV fold (grid search) and in the final model
-def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="saved_models", model_base_name=None, save_artifacts=True, cv_method='skf', use_smote=True):
+def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="saved_models", model_base_name=None, save_artifacts=True, cv_method='skf', use_smote=True, n_jobs=1):
     
     dataset = dataset.copy()
 
@@ -708,7 +714,7 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
     y_test = processed_test['target'].values
 
     # --- Step 5: Grid search (uses SMOTE inside each CV fold) ---
-    model_dict = grid_search(X_train, y_train, param_grid, csv_path, feature_names, cv_method=cv_method, use_smote=use_smote)
+    model_dict = grid_search(X_train, y_train, param_grid, csv_path, feature_names, cv_method=cv_method, use_smote=use_smote, n_jobs=n_jobs)
 
     # --- Step 6: Final model with full report ---
     model, columns, imputer, scaler, summary = build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_names, use_smote=use_smote)
