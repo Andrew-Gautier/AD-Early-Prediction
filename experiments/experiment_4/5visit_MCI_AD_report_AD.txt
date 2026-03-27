@@ -1,0 +1,33 @@
+Dataset base: 5visit_MCI_AD
+Progression type: AD
+MMSE imputation: post-split (train-fit)
+CV method: loocv
+Class balancing: SMOTENC
+Best hyperparameters:
+  objective: binary:logistic
+  colsample_bytree: 1.0
+  eval_metric: auc
+  learning_rate: 0.2
+  max_depth: 3
+  n_estimators: 100
+  random_state: 42
+  subsample: 0.6
+
+Classification Report:
+              precision    recall  f1-score   support
+
+           0       0.67      0.40      0.50         5
+           1       0.88      0.95      0.91        22
+
+    accuracy                           0.85        27
+   macro avg       0.77      0.68      0.71        27
+weighted avg       0.84      0.85      0.84        27
+
+
+Base ROC AUC: 0.9727
+Bootstrap 95% CI (n=1000, valid_samples=1000/1002):
+- Accuracy: 0.852 (CI: 0.704, 0.963)
+- Precision (macro): 0.771 (CI: 0.407, 0.980)
+- Recall (macro): 0.677 (CI: 0.458, 0.957)
+- F1 (macro): 0.707 (CI: 0.438, 0.918)
+- ROC AUC: 0.973 (CI: 0.891, 1.000)
