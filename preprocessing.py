@@ -345,6 +345,7 @@ def time_series_slicer(target_class, original_data, target_point_count):
     
     # grand dataset needed for age adjustment
     current_dir = os.path.dirname(os.path.abspath(__file__)) 
+    ### NOTE: MAGIC FILE PATH BELOW, CHANGE IF NECESSARY
     target_file = os.path.join(current_dir, 'investigator_ftldlbd_nacc72.csv')
     df = pd.read_csv(target_file, header=0)
 
@@ -556,6 +557,53 @@ def _detect_reverters(df, task):
     return idx
 
 
+# ── Lead-time slicing helpers ──────────────────────────────────────────────────
+
+_LT_TAGS = ['Progression', 'BMI', 'MMSE', 'GDS', 'CDR', 'TOBAC30', 'BILLS',
+            'TAXES', 'SHOPPING', 'GAMES', 'STOVE', 'MEALPREP', 'EVENTS',
+            'PAYATTN', 'REMDATES', 'TRAVEL', 'hearing', 'vision']
+
+
+def _slice_first_n(df, n):
+    """Slice all longitudinal columns in *df* to the first *n* time points (in-place)."""
+    for ind, (i, row) in enumerate(df.iterrows()):
+        for v in _LT_TAGS:
+            val = row[v]
+            if isinstance(val, str):
+                val = eval(val.replace("nan", "np.nan"))
+            row[v] = val[:n]
+        df.iloc[ind] = row
+
+
+def _slice_progressor(df, n, target_label=2):
+    """Slice progressors to *n* visits around the first occurrence of *target_label* (in-place).
+
+    If the target label appears within the first *n* visits, use visits 0..n-1.
+    Otherwise, end at the first target visit and go back n-1 visits.
+    Mirrors the logic in ``time_series_slicer`` for target_class=1.
+    """
+    for ind, (i, row) in enumerate(df.iterrows()):
+        prog = row['Progression']
+        if isinstance(prog, str):
+            prog = eval(prog)
+        # find window
+        if any(prog[a] == target_label for a in range(min(n, len(prog)))):
+            old_tp, new_tp = 0, n - 1
+        else:
+            old_tp, new_tp = 0, n - 1  # fallback
+            for a in range(n, len(prog)):
+                if prog[a] == target_label:
+                    new_tp = a
+                    old_tp = a - n + 1
+                    break
+        for v in _LT_TAGS:
+            val = row[v]
+            if isinstance(val, str):
+                val = eval(val.replace("nan", "np.nan"))
+            row[v] = val[old_tp:new_tp + 1]
+        df.iloc[ind] = row
+
+
 # ── Main pipeline ──────────────────────────────────────────────────────────────
 
 def run_pipeline(
@@ -592,6 +640,7 @@ def run_pipeline(
     reverters_mci_ad = []
     new_5_cn_mci = pd.DataFrame()
     new_5_mci_ad = pd.DataFrame()
+    lead_time_rows = []  # accumulates paired prog/non-prog rows from 6-10 visit files
 
     # --- MMSE tolerance map: visit_count → max allowed NaN -----------------
     mmse_tol = {2: 0, 3: 0, 4: 1, 5: 1, 6: 2, 7: 2, 8: 3, 9: 3, 10: 4}
@@ -741,6 +790,65 @@ def run_pipeline(
             if not sliced_ma.empty:
                 new_5_mci_ad = pd.concat([new_5_mci_ad, sliced_ma], axis=0)
 
+            # ── Lead-time dataset: balanced set of all four classes ──────
+            # sliced_cn  = CN→MCI progressors  (Prog has 0 & 1)
+            # sliced_ma  = MCI non-progressors  (Prog all 1s)
+            # We still need:
+            #   CN non-progressors   (Prog all 0s)
+            #   MCI→AD progressors   (Prog has 1 & 2)
+            # Both groups exist in the original df but aren't captured by
+            # time_series_slicer.  Extract them here, slice to 5 visits
+            # using the same first-5 window, then balance all four groups
+            # to the size of the smallest group.
+
+            # ---- CN non-progressors: Progression is all 0 ----
+            cn_np_idx = []
+            for ii, (_, rr) in enumerate(df.iterrows()):
+                prog = _get_progression(rr)
+                if all(v == 0 for v in prog):
+                    cn_np_idx.append(ii)
+            cn_nonprog = df.iloc[cn_np_idx].copy()
+            if not cn_nonprog.empty:
+                # slice to first 5 visits (same as slicer target_class=0 logic)
+                _slice_first_n(cn_nonprog, 5)
+
+            # ---- MCI→AD progressors: Progression has 1 and 2 ----
+            mci_prog_idx = []
+            for ii, (_, rr) in enumerate(df.iterrows()):
+                prog = _get_progression(rr)
+                if 1 in prog and 2 in prog:
+                    mci_prog_idx.append(ii)
+            mci_prog = df.iloc[mci_prog_idx].copy()
+            if not mci_prog.empty:
+                # slice: if progression to AD within first 5 visits use those,
+                # else use the window ending at first AD visit
+                _slice_progressor(mci_prog, 5, target_label=2)
+
+            # Remove reverters from new groups
+            rev_cn_np = _detect_reverters(cn_nonprog, 'CN_MCI') if not cn_nonprog.empty else []
+            rev_mci_p = _detect_reverters(mci_prog, 'MCI_AD') if not mci_prog.empty else []
+            if rev_cn_np:
+                cn_nonprog = cn_nonprog.drop(cn_nonprog.index[rev_cn_np])
+            if rev_mci_p:
+                mci_prog = mci_prog.drop(mci_prog.index[rev_mci_p])
+
+            # Balance all four groups to the smallest non-empty group size
+            groups = {
+                'CN_nonprog': cn_nonprog,
+                'CN_prog': sliced_cn,
+                'MCI_nonprog': sliced_ma,
+                'MCI_prog': mci_prog,
+            }
+            sizes = {k: len(v) for k, v in groups.items() if not v.empty}
+            if sizes:
+                min_size = min(sizes.values())
+                balanced = []
+                for k, grp in groups.items():
+                    if not grp.empty:
+                        balanced.append(grp.sample(n=min(min_size, len(grp)), random_state=42))
+                if balanced:
+                    lead_time_rows.append(pd.concat(balanced, axis=0))
+
     # ── Save combined 5-visit datasets ────────────────────────────────────
     if not new_5_cn_mci.empty:
         new_5_cn_mci.to_csv(os.path.join(dest_dir, "5visit_CN_MCI.csv"), index=False)
@@ -753,6 +861,30 @@ def run_pipeline(
     if reverters_mci_ad:
         pd.concat(reverters_mci_ad).to_csv(os.path.join(dest_dir, "reverters_MCI_AD.csv"), index=False)
 
+    # ── Save lead-time dataset ────────────────────────────────────────────
+    if lead_time_rows:
+        lead_time_df = pd.concat(lead_time_rows, axis=0).reset_index(drop=True)
+        lead_time_df.to_csv(os.path.join(dest_dir, "lead_time.csv"), index=False)
+        if verbose:
+            # Four-class breakdown
+            def _lt_class(row):
+                prog = _get_progression(row)
+                pid = row['Prog_ID']
+                if isinstance(pid, str):
+                    pid = eval(pid)
+                if pid == 0 and all(v == 0 for v in prog):
+                    return 'CN_nonprog'
+                if pid == 1 and 0 in prog and 1 in prog:
+                    return 'CN_prog'
+                if pid == 0 and all(v == 1 for v in prog):
+                    return 'MCI_nonprog'
+                if pid == 1 and 1 in prog and 2 in prog:
+                    return 'MCI_prog'
+                return 'other'
+            cls = lead_time_df.apply(_lt_class, axis=1).value_counts()
+            print(f"  lead_time.csv: {len(lead_time_df)} rows — "
+                  + ", ".join(f"{k}: {v}" for k, v in cls.items()))
+
     # ── Summary ───────────────────────────────────────────────────────────
     if verbose:
         print("\n── Drop summary ──")
@@ -763,6 +895,8 @@ def run_pipeline(
         n_rev_cm = sum(len(r) for r in reverters_cn_mci) if reverters_cn_mci else 0
         n_rev_ma = sum(len(r) for r in reverters_mci_ad) if reverters_mci_ad else 0
         print(f"  Reverters saved — CN/MCI: {n_rev_cm}, MCI/AD: {n_rev_ma}")
+        n_lt = len(pd.concat(lead_time_rows)) if lead_time_rows else 0
+        print(f"  lead_time.csv: {n_lt} rows from 6-10 visit cohorts")
         print(f"\n✓ Output written to {dest_dir}/")
 
     return stats

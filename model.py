@@ -376,20 +376,6 @@ def split_dataset(data):
 # For the training of the best model with the best set of hyperparameters, prints out the whole performance report.
 def build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_names, use_smote=True):
     
-    # Build a model with the input hyperparameter values (no scale_pos_weight; using SMOTE instead)
-    model = XGBClassifier(
-        objective='binary:logistic',
-        eval_metric='auc',
-
-        n_estimators=model_dict['n_estimators'],
-        max_depth=model_dict['max_depth'],
-        learning_rate=model_dict['learning_rate'],
-        subsample=model_dict['subsample'],
-        colsample_bytree=model_dict['colsample_bytree'],
-
-        random_state=42,
-    )
-    
     # Fit imputer/scaler on training set only (avoid leakage)
     imputer = SimpleImputer(strategy='mean')
     scaler = StandardScaler()
@@ -401,9 +387,27 @@ def build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_name
         cat_indices = _get_cat_indices(feature_names)
         X_train_res, y_train_res = _apply_smotenc(X_train_proc, y_train, cat_indices)
         print(f"SMOTE resampling: {len(y_train)} -> {len(y_train_res)} training samples")
+        spw = 1.0
     else:
         X_train_res, y_train_res = X_train_proc, y_train
-        print(f"SMOTE disabled: using {len(y_train)} training samples as-is")
+        n_neg = int((y_train == 0).sum())
+        n_pos = int((y_train == 1).sum())
+        spw = n_neg / n_pos if n_pos > 0 else 1.0
+        print(f"SMOTE disabled: using {len(y_train)} training samples as-is (scale_pos_weight={spw:.2f})")
+
+    model = XGBClassifier(
+        objective='binary:logistic',
+        eval_metric='auc',
+
+        n_estimators=model_dict['n_estimators'],
+        max_depth=model_dict['max_depth'],
+        learning_rate=model_dict['learning_rate'],
+        subsample=model_dict['subsample'],
+        colsample_bytree=model_dict['colsample_bytree'],
+
+        scale_pos_weight=spw,
+        random_state=42,
+    )
 
     model.fit(X_train_res, y_train_res)
     
@@ -456,21 +460,6 @@ def build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_name
 # To train models for cross-validation. Returns only AUC score. Does not print out anything.
 def build_model(X_train, X_test, y_train, y_test, model_dict, feature_names, use_smote=True, xgb_n_jobs=None):
     
-    # Build a model with the input hyperparameter values (no scale_pos_weight; using SMOTE instead)
-    model = XGBClassifier(
-        objective='binary:logistic',
-        eval_metric='auc',
-
-        n_estimators=model_dict['n_estimators'],
-        max_depth=model_dict['max_depth'],
-        learning_rate=model_dict['learning_rate'],
-        subsample=model_dict['subsample'],
-        colsample_bytree=model_dict['colsample_bytree'],
-
-        n_jobs=xgb_n_jobs,
-        random_state=42,
-    )
-    
     # Per-fold imputation/scaling fit on training fold only (avoid leakage)
     imputer = SimpleImputer(strategy='mean')
     scaler = StandardScaler()
@@ -481,8 +470,27 @@ def build_model(X_train, X_test, y_train, y_test, model_dict, feature_names, use
     if use_smote:
         cat_indices = _get_cat_indices(feature_names)
         X_train_res, y_train_res = _apply_smotenc(X_train_proc, y_train, cat_indices)
+        spw = 1.0
     else:
         X_train_res, y_train_res = X_train_proc, y_train
+        n_neg = int((y_train == 0).sum())
+        n_pos = int((y_train == 1).sum())
+        spw = n_neg / n_pos if n_pos > 0 else 1.0
+
+    model = XGBClassifier(
+        objective='binary:logistic',
+        eval_metric='auc',
+
+        n_estimators=model_dict['n_estimators'],
+        max_depth=model_dict['max_depth'],
+        learning_rate=model_dict['learning_rate'],
+        subsample=model_dict['subsample'],
+        colsample_bytree=model_dict['colsample_bytree'],
+
+        scale_pos_weight=spw,
+        n_jobs=xgb_n_jobs,
+        random_state=42,
+    )
 
     model.fit(X_train_res, y_train_res)
     
@@ -555,10 +563,21 @@ def _loocv_fold(fold_idx, df_with_target, covariates, mmse_needs_imputation,
         X_tr, y_tr = _apply_smotenc(X_tr, y_tr, cat_idx)
 
     # 9. Train + predict
+    # When SMOTE is disabled (Mode A), compute scale_pos_weight from the N-1
+    # training labels to up-weight the minority class inside XGBoost's loss.
+    # Computed per fold from y_tr only — no leakage from the held-out sample.
+    if not use_smote:
+        n_neg = int((y_tr == 0).sum())
+        n_pos = int((y_tr == 1).sum())
+        spw = n_neg / n_pos if n_pos > 0 else 1.0
+    else:
+        spw = 1.0
+
     clf = XGBClassifier(
         objective='binary:logistic', eval_metric='auc',
         n_estimators=n_est, max_depth=max_depth, learning_rate=lr,
         subsample=subsample, colsample_bytree=colsample,
+        scale_pos_weight=spw,
         n_jobs=1, random_state=42,
     )
     clf.fit(X_tr, y_tr)
