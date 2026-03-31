@@ -1,0 +1,32 @@
+Dataset base: original_5visit_CN_MCI
+Progression type: MCI
+CV method: loocv (Mode A — no train/test split)
+Class balancing: disabled
+MMSE imputation: per-fold (fit on N-1)
+Total samples: 383
+
+Best hyperparameters:
+  n_estimators: 300
+  max_depth: 5
+  learning_rate: 0.1
+  subsample: 0.6
+  colsample_bytree: 0.6
+
+Classification Report:
+              precision    recall  f1-score   support
+
+           0       0.97      0.99      0.98       370
+           1       0.40      0.15      0.22        13
+
+    accuracy                           0.96       383
+   macro avg       0.69      0.57      0.60       383
+weighted avg       0.95      0.96      0.96       383
+
+
+Base ROC AUC: 0.7661
+Bootstrap 95% CI (n=1000, valid_samples=1000/1000):
+- Accuracy: 0.963 (CI: 0.943, 0.979) range=0.037
+- Precision (macro): 0.685 (CI: 0.482, 0.984) range=0.503
+- Recall (macro): 0.573 (CI: 0.493, 0.686) range=0.193
+- F1 (macro): 0.602 (CI: 0.489, 0.731) range=0.243
+- ROC AUC: 0.766 (CI: 0.598, 0.903) range=0.305
