@@ -1,0 +1,126 @@
+========================================================================
+  BEST MODEL PERFORMANCE REPORT
+  Alzheimer's Disease Early Prediction — XGBoost
+========================================================================
+
+────────────────────────────────────────────────────────────────────────
+  TASK: CN→MCI
+────────────────────────────────────────────────────────────────────────
+
+  ★ OVERALL BEST MODEL
+  Experiment : Exp 3  |  Visits: 4  |  N = 115  (Class 0: 111, Class 1: 4)
+  Config     : SKF, SMOTE enabled, Dataset_2 with reverters removed
+  ROC AUC    : 0.991  (0.972, 1.000)  [range 0.028]
+  Accuracy   : 0.991  (0.974, 1.000)  [range 0.026]
+  Precision  : 0.900  (0.700, 1.000)  [range 0.300]
+  Recall     : 0.995  (0.986, 1.000)  [range 0.014]
+  F1 Score   : 0.942  (0.779, 1.000)  [range 0.221]
+
+  Best per visit count:
+
+  ▸ 2-Visit Window  (Exp 5)
+  Experiment : Exp 5  |  Visits: 2  |  N = 1078  (Class 0: 998, Class 1: 80)
+  Config     : LOOCV, no SMOTE, per-fold MMSE imputation, Dataset_updated
+  ROC AUC    : 0.875  (0.827, 0.918)  [range 0.091]
+  Accuracy   : 0.926  (0.910, 0.941)  [range 0.031]
+  Precision  : 0.717  (0.601, 0.838)  [range 0.237]
+  Recall     : 0.557  (0.523, 0.599)  [range 0.076]
+  F1 Score   : 0.581  (0.528, 0.639)  [range 0.111]
+
+  ▸ 3-Visit Window  (Exp 1)
+  Experiment : Exp 1  |  Visits: 3  |  N = 125  (Class 0: 115, Class 1: 10)
+  Config     : SKF, SMOTE disabled, Dataset_1
+  ROC AUC    : 0.976  (0.948, 0.996)  [range 0.048]
+  Accuracy   : 0.936  (0.888, 0.976)  [range 0.088]
+  Precision  : 0.783  (0.633, 0.928)  [range 0.295]
+  Recall     : 0.783  (0.628, 0.944)  [range 0.316]
+  F1 Score   : 0.783  (0.633, 0.908)  [range 0.275]
+
+  ▸ 4-Visit Window  (Exp 3)
+  Experiment : Exp 3  |  Visits: 4  |  N = 115  (Class 0: 111, Class 1: 4)
+  Config     : SKF, SMOTE enabled, Dataset_2 with reverters removed
+  ROC AUC    : 0.991  (0.972, 1.000)  [range 0.028]
+  Accuracy   : 0.991  (0.974, 1.000)  [range 0.026]
+  Precision  : 0.900  (0.700, 1.000)  [range 0.300]
+  Recall     : 0.995  (0.986, 1.000)  [range 0.014]
+  F1 Score   : 0.942  (0.779, 1.000)  [range 0.221]
+
+  ▸ 5-Visit Window  (Exp 4)
+  Experiment : Exp 4  |  Visits: 5  |  N = 87  (Class 0: 74, Class 1: 13)
+  Config     : LOOCV, SMOTE disabled, Dataset_updated (reverters dropped, BMI fix, age≥50)
+  ROC AUC    : 0.943  (0.877, 0.991)  [range 0.114]
+  Accuracy   : 0.920  (0.851, 0.966)  [range 0.115]
+  Precision  : 0.848  (0.719, 0.974)  [range 0.255]
+  Recall     : 0.826  (0.695, 0.945)  [range 0.250]
+  F1 Score   : 0.837  (0.707, 0.938)  [range 0.231]
+
+────────────────────────────────────────────────────────────────────────
+  TASK: MCI→AD
+────────────────────────────────────────────────────────────────────────
+
+  ★ OVERALL BEST MODEL
+  Experiment : Exp 4  |  Visits: 5  |  N = 27  (Class 0: 5, Class 1: 22)
+  Config     : LOOCV, SMOTE disabled, Dataset_updated (reverters dropped, BMI fix, age≥50)
+  ROC AUC    : 0.973  (0.891, 1.000)  [range 0.109]
+  Accuracy   : 0.852  (0.704, 0.963)  [range 0.259]
+  Precision  : 0.771  (0.407, 0.980)  [range 0.573]
+  Recall     : 0.677  (0.458, 0.957)  [range 0.499]
+  F1 Score   : 0.707  (0.438, 0.918)  [range 0.480]
+
+  Best per visit count:
+
+  ▸ 2-Visit Window  (Exp 5)
+  Experiment : Exp 5  |  Visits: 2  |  N = 435  (Class 0: 217, Class 1: 218)
+  Config     : LOOCV, no SMOTE, per-fold MMSE imputation, Dataset_updated
+  ROC AUC    : 0.737  (0.690, 0.781)  [range 0.091]
+  Accuracy   : 0.651  (0.605, 0.697)  [range 0.092]
+  Precision  : 0.653  (0.607, 0.699)  [range 0.092]
+  Recall     : 0.651  (0.605, 0.696)  [range 0.091]
+  F1 Score   : 0.649  (0.603, 0.694)  [range 0.091]
+
+  ▸ 3-Visit Window  (Exp 5)
+  Experiment : Exp 5  |  Visits: 3  |  N = 289  (Class 0: 84, Class 1: 205)
+  Config     : LOOCV, no SMOTE, per-fold MMSE imputation, Dataset_updated
+  ROC AUC    : 0.828  (0.773, 0.876)  [range 0.103]
+  Accuracy   : 0.779  (0.727, 0.824)  [range 0.097]
+  Precision  : 0.762  (0.689, 0.832)  [range 0.143]
+  Recall     : 0.658  (0.603, 0.710)  [range 0.107]
+  F1 Score   : 0.675  (0.607, 0.733)  [range 0.126]
+
+  ▸ 4-Visit Window  (Exp 6)
+  Experiment : Exp 6  |  Visits: 4  |  N = 226  (Class 0: 36, Class 1: 190)
+  Config     : LOOCV, no SMOTE, per-fold MMSE imputation, scale_pos_weight, do_impute=True, Dataset_updated
+  ROC AUC    : 0.839  (0.771, 0.902)  [range 0.131]
+  Accuracy   : 0.792  (0.735, 0.845)  [range 0.110]
+  Precision  : 0.663  (0.594, 0.733)  [range 0.139]
+  Recall     : 0.730  (0.643, 0.812)  [range 0.169]
+  F1 Score   : 0.682  (0.601, 0.755)  [range 0.154]
+
+  ▸ 5-Visit Window  (Exp 4)
+  Experiment : Exp 4  |  Visits: 5  |  N = 27  (Class 0: 5, Class 1: 22)
+  Config     : LOOCV, SMOTE disabled, Dataset_updated (reverters dropped, BMI fix, age≥50)
+  ROC AUC    : 0.973  (0.891, 1.000)  [range 0.109]
+  Accuracy   : 0.852  (0.704, 0.963)  [range 0.259]
+  Precision  : 0.771  (0.407, 0.980)  [range 0.573]
+  Recall     : 0.677  (0.458, 0.957)  [range 0.499]
+  F1 Score   : 0.707  (0.438, 0.918)  [range 0.480]
+
+────────────────────────────────────────────────────────────────────────
+  EXPERIMENT CONFIGURATIONS
+────────────────────────────────────────────────────────────────────────
+  Exp 1: SKF, SMOTE disabled, Dataset_1
+  Exp 2: SKF, SMOTE enabled, Dataset_2 (added GDS/categorical longitudinal, MMSE imputation fix)
+  Exp 3: SKF, SMOTE enabled, Dataset_2 with reverters removed
+  Exp 4: LOOCV, SMOTE disabled, Dataset_updated (reverters dropped, BMI fix, age≥50)
+  Exp 5: LOOCV, no SMOTE, per-fold MMSE imputation, Dataset_updated
+  Exp 6: LOOCV, no SMOTE, per-fold MMSE imputation, scale_pos_weight, do_impute=True, Dataset_updated
+
+────────────────────────────────────────────────────────────────────────
+  KEY FINDINGS
+────────────────────────────────────────────────────────────────────────
+  • CN→MCI: Best AUC = 0.991 (Exp 3, 4-visit, N=115)
+    AUC trend (best per visit): 2v=0.875, 3v=0.976, 4v=0.991, 5v=0.943
+  • MCI→AD: Best AUC = 0.973 (Exp 4, 5-visit, N=27)
+    AUC trend (best per visit): 2v=0.737, 3v=0.828, 4v=0.839, 5v=0.973
+
+========================================================================
