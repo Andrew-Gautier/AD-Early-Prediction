@@ -1257,7 +1257,7 @@ def eval_model(model, x, y):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  LEAD-TIME ANALYSIS  (from xgboost_leadtime.py)
+#  LEAD-TIME ANALYSIS  
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def add_time_dimension(df, months_between_visits=12):
