@@ -1,0 +1,33 @@
+Dataset base: pooled_CN
+Progression type: CN
+MMSE imputation: post-split (train-fit)
+CV method: skf
+Class balancing: disabled
+Best hyperparameters:
+  objective: binary:logistic
+  colsample_bytree: 0.6
+  eval_metric: auc
+  learning_rate: 0.01
+  max_depth: 9
+  n_estimators: 100
+  random_state: 42
+  subsample: 0.4
+
+Classification Report:
+              precision    recall  f1-score   support
+
+           0       0.98      0.94      0.96       494
+           1       0.40      0.70      0.51        30
+
+    accuracy                           0.92       524
+   macro avg       0.69      0.82      0.73       524
+weighted avg       0.95      0.92      0.93       524
+
+
+Base ROC AUC: 0.8916
+Bootstrap 95% CI (n=1000, valid_samples=1000/1000):
+- Accuracy: 0.922 (CI: 0.899, 0.945) range=0.046
+- Precision (macro): 0.689 (CI: 0.624, 0.759) range=0.135
+- Recall (macro): 0.818 (CI: 0.735, 0.898) range=0.163
+- F1 (macro): 0.732 (CI: 0.661, 0.801) range=0.141
+- ROC AUC: 0.892 (CI: 0.812, 0.951) range=0.139

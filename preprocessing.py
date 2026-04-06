@@ -214,28 +214,45 @@ def impute_mmse(df, covariates):
     mmse_imputer, df_out = fit_mmse_imputer(df, covariates)
     return df_out
 
+def _pad_to_max(lists):
+    """Pad a sequence of lists to uniform length with NaN, return (2-D array, original lengths)."""
+    lengths = [len(x) if isinstance(x, list) else 1 for x in lists]
+    max_len = max(lengths)
+    padded = []
+    for lst, n in zip(lists, lengths):
+        row = list(lst) if isinstance(lst, list) else [lst]
+        row += [np.nan] * (max_len - n)
+        padded.append(row)
+    return np.array(padded, dtype=float), lengths
+
+
 def _build_mmse_matrix(df, covariates):
-    """Helper: build the combined MMSE + covariate matrix and return (mmse_matrix, combined_data, n_mmse_cols)."""
+    """Helper: build the combined MMSE + covariate matrix.
+
+    Handles variable-length list columns by padding to the longest
+    sequence with NaN.  Returns (mmse_matrix, combined_data, n_mmse_cols, orig_lengths).
+    """
     mmse_lists = df['MMSE'].apply(convert_to_real_nan)
-    mmse_matrix = np.array([x for x in mmse_lists])
+    mmse_matrix, orig_lengths = _pad_to_max(mmse_lists)
     covariate_matrix = []
     for col in covariates:
         if df[col].dtype == 'object' and str(df[col].iloc[0]).startswith('['):
             col_data = df[col].apply(convert_to_real_nan)
-            col_matrix = np.array([x for x in col_data])
+            col_matrix, _ = _pad_to_max(col_data)
             covariate_matrix.append(col_matrix)
         else:
             col_matrix = df[col].values.reshape(-1, 1)
             covariate_matrix.append(col_matrix)
     covariate_data = np.hstack([x if len(x.shape) > 1 else x.reshape(-1, 1) for x in covariate_matrix])
     combined_data = np.hstack([mmse_matrix, covariate_data])
-    return mmse_matrix, combined_data, mmse_matrix.shape[1]
+    return mmse_matrix, combined_data, mmse_matrix.shape[1], orig_lengths
 
-def _process_mmse_values(imputed_mmse):
-    """Post-process imputed MMSE: cap at 30.0, round to 2 decimals, convert to float lists."""
+def _process_mmse_values(imputed_mmse, orig_lengths=None):
+    """Post-process imputed MMSE: cap at 30.0, round to 2 decimals, trim to original lengths."""
     processed = []
-    for row in imputed_mmse:
-        processed.append([min(round(float(val), 2), 30.0) for val in row])
+    for i, row in enumerate(imputed_mmse):
+        n = orig_lengths[i] if orig_lengths is not None else len(row)
+        processed.append([min(round(float(val), 2), 30.0) for val in row[:n]])
     return processed
 
 def fit_mmse_imputer(df, covariates):
@@ -243,7 +260,7 @@ def fit_mmse_imputer(df, covariates):
     
     Use this on the TRAINING set only. Then call transform_mmse() on the test set.
     """
-    mmse_matrix, combined_data, n_mmse_cols = _build_mmse_matrix(df, covariates)
+    mmse_matrix, combined_data, n_mmse_cols, orig_lengths = _build_mmse_matrix(df, covariates)
     imputer = IterativeImputer(
         estimator=BayesianRidge(),
         max_iter=20,
@@ -253,7 +270,7 @@ def fit_mmse_imputer(df, covariates):
     imputed_data = imputer.fit_transform(combined_data)
     imputed_mmse = imputed_data[:, :n_mmse_cols]
     df = df.copy()
-    df['MMSE'] = _process_mmse_values(imputed_mmse)
+    df['MMSE'] = _process_mmse_values(imputed_mmse, orig_lengths)
     return imputer, df
 
 def transform_mmse(df, covariates, fitted_imputer):
@@ -261,11 +278,11 @@ def transform_mmse(df, covariates, fitted_imputer):
     
     The imputer must have been fit via fit_mmse_imputer() on the training set.
     """
-    mmse_matrix, combined_data, n_mmse_cols = _build_mmse_matrix(df, covariates)
+    mmse_matrix, combined_data, n_mmse_cols, orig_lengths = _build_mmse_matrix(df, covariates)
     imputed_data = fitted_imputer.transform(combined_data)
     imputed_mmse = imputed_data[:, :n_mmse_cols]
     df = df.copy()
-    df['MMSE'] = _process_mmse_values(imputed_mmse)
+    df['MMSE'] = _process_mmse_values(imputed_mmse, orig_lengths)
     return df
 
 # Manually impute a single vector of categorical longitudinal variables

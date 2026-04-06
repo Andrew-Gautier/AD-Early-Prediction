@@ -1,0 +1,33 @@
+Dataset base: pooled_MCI_AD
+Progression type: AD
+MMSE imputation: post-split (train-fit)
+CV method: skf
+Class balancing: disabled
+Best hyperparameters:
+  objective: binary:logistic
+  colsample_bytree: 1.0
+  eval_metric: auc
+  learning_rate: 0.01
+  max_depth: 3
+  n_estimators: 400
+  random_state: 42
+  subsample: 0.6
+
+Classification Report:
+              precision    recall  f1-score   support
+
+           0       0.59      0.74      0.66        69
+           1       0.86      0.76      0.81       145
+
+    accuracy                           0.75       214
+   macro avg       0.73      0.75      0.73       214
+weighted avg       0.77      0.75      0.76       214
+
+
+Base ROC AUC: 0.8166
+Bootstrap 95% CI (n=1000, valid_samples=1000/1000):
+- Accuracy: 0.752 (CI: 0.696, 0.813) range=0.117
+- Precision (macro): 0.726 (CI: 0.665, 0.786) range=0.120
+- Recall (macro): 0.749 (CI: 0.685, 0.812) range=0.127
+- F1 (macro): 0.732 (CI: 0.667, 0.794) range=0.126
+- ROC AUC: 0.817 (CI: 0.757, 0.879) range=0.122

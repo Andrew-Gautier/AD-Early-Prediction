@@ -71,70 +71,115 @@ def create_target_variable_cn(row):
 
 # Keep old name as alias for backwards compatibility
 create_target_variable_mci = create_target_variable_cn
-def create_delta_features(df):
-    """
-    Enhanced version that:
-    1. Safely parses array strings first
-    2. Handles mixed numeric/non-numeric data
-    3. Creates features for variable visit lengths
-    """
-    df = df.copy()
-    new_columns = {}  # Dictionary to store new columns
-
-    # First pass: Convert all array-strings to lists of floats
+def _parse_array_columns(df):
+    """Convert array-string columns (e.g. '[1.0, 2.5, nan]') to lists of floats in-place."""
     for col in df.columns:
         if df[col].dtype == object and df[col].str.startswith('[').any():
             df[col] = df[col].apply(
-                lambda x: [float(v.strip()) if v.strip() != 'nan' else np.nan 
-                         for v in x.replace('[','').replace(']','').split(',')] 
+                lambda x: [float(v.strip()) if v.strip() != 'nan' else np.nan
+                           for v in x.replace('[', '').replace(']', '').split(',')]
                 if isinstance(x, str) and x.startswith('[') else np.nan
             )
-    
-    # Second pass: Create features only for numeric arrays
+
+
+def _is_numeric_list_col(series):
+    """True if the first element is a list of numeric values."""
+    first = series.iloc[0]
+    return (isinstance(first, list)
+            and all(isinstance(v, (int, float)) for v in first if not pd.isna(v)))
+
+
+def _has_valid(x):
+    return isinstance(x, list) and np.any(~np.isnan(x))
+
+
+def _first_valid(x):
+    if not isinstance(x, list):
+        return np.nan
+    return next((v for v in x if not np.isnan(v)), np.nan)
+
+
+def _last_valid(x):
+    if not isinstance(x, list):
+        return np.nan
+    return next((v for v in reversed(x) if not np.isnan(v)), np.nan)
+
+
+def _calc_slope(x):
+    if isinstance(x, list) and len(x) > 1:
+        xv = np.arange(len(x))
+        yv = np.array(x)
+        valid = ~np.isnan(yv)
+        if valid.sum() > 1:
+            return linregress(xv[valid], yv[valid]).slope
+    return np.nan
+
+
+def _calc_acceleration(x):
+    """Slope of consecutive deltas (2nd derivative). Needs >= 3 non-NaN values."""
+    if not isinstance(x, list) or len(x) < 3:
+        return np.nan
+    arr = np.array(x, dtype=float)
+    valid = ~np.isnan(arr)
+    if valid.sum() < 3:
+        return np.nan
+    # Keep only valid values in order, compute consecutive deltas
+    vals = arr[valid]
+    deltas = np.diff(vals)
+    if len(deltas) < 2:
+        return np.nan
+    idx = np.arange(len(deltas))
+    return linregress(idx, deltas).slope
+
+
+def _engineer_visit_agnostic(df, new_columns):
+    """Populate *new_columns* dict with visit-agnostic features for all numeric-list columns in *df*."""
     for col in df.columns:
-        if isinstance(df[col].iloc[0], list) and all(isinstance(v, (int, float)) for v in df[col].iloc[0] if not pd.isna(v)):
-            max_visits = max(len(v) for v in df[col] if isinstance(v, list))
-            
-            # 1. Individual visit values
-            for i in range(max_visits):
-                new_columns[f"{col}_V{i+1}"] = df[col].apply(
-                    lambda x: x[i] if isinstance(x, list) and i < len(x) else np.nan
-                )
-            
-            # 2. Deltas from baseline (V1)
-            for i in range(1, max_visits):
-                new_columns[f"{col}_delta_V{i+1}-V1"] = df[col].apply(
-                    lambda x: x[i]-x[0] if isinstance(x, list) and len(x) > i else np.nan
-                )
-            
-            # 3. Slope of linear trend
-            def calc_slope(x):
-                if isinstance(x, list) and len(x) > 1:
-                    x_vals = np.arange(len(x))
-                    y_vals = np.array(x)
-                    valid = ~np.isnan(y_vals)
-                    if sum(valid) > 1:  # Need at least 2 points
-                        return linregress(x_vals[valid], y_vals[valid]).slope
-                return np.nan
-                
-            new_columns[f"{col}_slope"] = df[col].apply(calc_slope)
-            
-            # 4. Aggregates
-            # Guard against empty/all-NaN lists to avoid warnings
-            new_columns[f"{col}_mean"] = df[col].apply(
-                lambda x: (np.nanmean(x)
-                           if isinstance(x, list) and np.any(~np.isnan(x))
-                           else np.nan)
-            )
-            new_columns[f"{col}_max"] = df[col].apply(
-                lambda x: (np.nanmax(x)
-                           if isinstance(x, list) and np.any(~np.isnan(x))
-                           else np.nan)
-            )
-    
-    # Add all new columns to the DataFrame at once
+        if not _is_numeric_list_col(df[col]):
+            continue
+
+        new_columns[f"{col}_mean"] = df[col].apply(
+            lambda x: np.nanmean(x) if _has_valid(x) else np.nan)
+        new_columns[f"{col}_max"] = df[col].apply(
+            lambda x: np.nanmax(x) if _has_valid(x) else np.nan)
+        new_columns[f"{col}_min"] = df[col].apply(
+            lambda x: np.nanmin(x) if _has_valid(x) else np.nan)
+        new_columns[f"{col}_std"] = df[col].apply(
+            lambda x: (np.nanstd(x, ddof=1)
+                       if isinstance(x, list) and np.sum(~np.isnan(x)) > 1
+                       else np.nan))
+        new_columns[f"{col}_range"] = df[col].apply(
+            lambda x: (np.nanmax(x) - np.nanmin(x)) if _has_valid(x) else np.nan)
+        new_columns[f"{col}_slope"] = df[col].apply(_calc_slope)
+        new_columns[f"{col}_first"] = df[col].apply(_first_valid)
+        new_columns[f"{col}_last"] = df[col].apply(_last_valid)
+        new_columns[f"{col}_last_minus_first"] = df[col].apply(
+            lambda x: (_last_valid(x) - _first_valid(x))
+            if _has_valid(x) else np.nan)
+        new_columns[f"{col}_acceleration"] = df[col].apply(_calc_acceleration)
+        new_columns[f"{col}_n_visits"] = df[col].apply(
+            lambda x: int(np.sum(~np.isnan(x))) if isinstance(x, list) else np.nan)
+
+
+def create_delta_features(df):
+    """Visit-agnostic feature engineering.
+
+    For each longitudinal (list-valued) column, creates fixed-width summary
+    statistics that are independent of the number of visits:
+
+        _mean, _max, _min, _std, _range, _slope, _first, _last,
+        _last_minus_first, _acceleration, _n_visits
+
+    Static / scalar columns are passed through unchanged.
+    """
+    df = df.copy()
+    new_columns = {}
+
+    _parse_array_columns(df)
+    _engineer_visit_agnostic(df, new_columns)
+
     df = pd.concat([df, pd.DataFrame(new_columns)], axis=1)
-    
+
     # Drop original array columns (keep only engineered features)
     array_cols = [col for col in df.columns if isinstance(df[col].iloc[0], list)] if len(df) > 0 else []
     df = df.drop(columns=array_cols)
@@ -302,10 +347,10 @@ def preprocess_data(df, progression_type):
         'ANX', 'NACCTBI', 'SMOKYRS', 'RACE', 'age', 'HISPANIC'
     ]
     
-    # Time-series features (we'll keep all of them)
-    # Matches per-visit (_V), delta, and summary features (slope, mean, max, min, std, etc.)
-    _TS_SUFFIXES = ('_V', '_delta_', '_slope', '_mean', '_max', '_min', '_std',
-                    '_range', '_first', '_last', '_last_minus_first', '_n_visits')
+    # Time-series features — visit-agnostic summary statistics
+    _TS_SUFFIXES = ('_slope', '_mean', '_max', '_min', '_std', '_range',
+                    '_first', '_last', '_last_minus_first', '_acceleration',
+                    '_n_visits')
     time_series_features = [col for col in all_features if any(s in col for s in _TS_SUFFIXES)]
     
     # Only keep features that actually exist in the dataframe
@@ -826,8 +871,8 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
     # --- Step 1: Create target variable on the raw DataFrame (needed for stratified split) ---
     if progression_type == 'AD':
         dataset['target'] = dataset.apply(create_target_variable_ad, axis=1)
-    elif progression_type == 'MCI':
-        dataset['target'] = dataset.apply(create_target_variable_mci, axis=1)
+    elif progression_type in ('MCI', 'CN'):
+        dataset['target'] = dataset.apply(create_target_variable_cn, axis=1)
 
     # Determine MMSE imputation needs early (shared by all modes)
     covariates = [c for c in MMSE_COVARIATES if c in dataset.columns]
@@ -1277,55 +1322,25 @@ def add_time_dimension(df, months_between_visits=12):
 
 
 def create_delta_features_truncated(df, max_visit):
-    """
-    Create delta/slope/aggregate features using only the first *max_visit* visits.
-    Identical logic to ``create_delta_features`` but truncates each time-series
-    before engineering features — used for lead-time analysis.
+    """Visit-agnostic features using only the first *max_visit* visits.
+
+    Identical feature set to ``create_delta_features`` but truncates each
+    time-series before engineering — used for lead-time analysis.
+    The output column set is constant regardless of *max_visit*, enabling
+    a single trained model to score any truncation length.
     """
     df = df.copy()
     new_columns = {}
 
-    # Parse array-string columns
+    _parse_array_columns(df)
+
+    # Truncate list columns to max_visit before engineering
     for col in df.columns:
-        if df[col].dtype == object and df[col].str.startswith('[').any():
+        if _is_numeric_list_col(df[col]):
             df[col] = df[col].apply(
-                lambda x: [float(v.strip()) if v.strip() != 'nan' else np.nan
-                           for v in x.replace('[', '').replace(']', '').split(',')]
-                if isinstance(x, str) and x.startswith('[') else np.nan
-            )
+                lambda x: x[:max_visit] if isinstance(x, list) else np.nan)
 
-    for col in df.columns:
-        if not (isinstance(df[col].iloc[0], list) and
-                all(isinstance(v, (int, float)) for v in df[col].iloc[0] if not pd.isna(v))):
-            continue
-
-        # Truncate to max_visit
-        df[col] = df[col].apply(lambda x: x[:max_visit] if isinstance(x, list) else np.nan)
-        n = min(max_visit, max(len(v) for v in df[col] if isinstance(v, list)))
-
-        for i in range(n):
-            new_columns[f"{col}_V{i+1}"] = df[col].apply(
-                lambda x: x[i] if isinstance(x, list) and i < len(x) else np.nan)
-        if n > 1:
-            for i in range(1, n):
-                new_columns[f"{col}_delta_V{i+1}-V1"] = df[col].apply(
-                    lambda x: x[i] - x[0] if isinstance(x, list) and len(x) > i else np.nan)
-
-        def _slope(x):
-            if isinstance(x, list) and len(x) > 1:
-                xv = np.arange(len(x))
-                yv = np.array(x)
-                valid = ~np.isnan(yv)
-                if valid.sum() > 1:
-                    return linregress(xv[valid], yv[valid]).slope
-            return np.nan
-
-        if n > 1:
-            new_columns[f"{col}_slope"] = df[col].apply(_slope)
-        new_columns[f"{col}_mean"] = df[col].apply(
-            lambda x: np.nanmean(x) if isinstance(x, list) else np.nan)
-        new_columns[f"{col}_max"] = df[col].apply(
-            lambda x: np.nanmax(x) if isinstance(x, list) else np.nan)
+    _engineer_visit_agnostic(df, new_columns)
 
     df = pd.concat([df, pd.DataFrame(new_columns, index=df.index)], axis=1)
     array_cols = [
@@ -1344,17 +1359,23 @@ def get_first_progression_visit(row, progression_code=1):
     return np.nan
 
 
-def evaluate_lead_time(df, models_dict, threshold, progression_type='MCI'):
+def evaluate_lead_time(df, model, imputer, scaler, feature_names,
+                       threshold, progression_type='CN', min_visits=2):
     """
-    For each progressor in *df*, find the earliest visit at which the model
-    exceeds *threshold* and compute the lead time (months before diagnosis).
+    For each progressor in *df*, find the earliest visit at which the
+    (single, visit-agnostic) model exceeds *threshold* and compute the
+    lead time (months before physician diagnosis).
 
     Parameters
     ----------
-    df            : DataFrame with 'Progression' and 'months_since_baseline' columns.
-    models_dict   : {visit_int: {'model': ..., 'imputer': ..., 'scaler': ...}}
-    threshold     : probability threshold for a positive prediction.
-    progression_type : 'MCI' or 'AD'.
+    df              : DataFrame with 'Progression' and 'months_since_baseline'.
+    model           : trained XGBClassifier (visit-agnostic features).
+    imputer, scaler : fitted SimpleImputer / StandardScaler.
+    feature_names   : list[str] — feature columns the model was trained on.
+    threshold       : probability threshold for a positive prediction.
+    progression_type : 'CN' or 'AD'.
+    min_visits      : minimum visits required to make a prediction (need ≥2
+                      for slope / acceleration).
 
     Returns
     -------
@@ -1377,16 +1398,18 @@ def evaluate_lead_time(df, models_dict, threshold, progression_type='MCI'):
                 continue
             diag_time = months[diag_idx]
 
-            # Check model predictions at each earlier visit
-            for visit in range(1, diag_idx + 1):
-                if visit not in models_dict:
-                    continue
-                md = models_dict[visit]
-                df_trunc = create_delta_features_truncated(df, max_visit=visit)
+            # Check model predictions at progressively more visits
+            row_df = df.loc[[idx]]
+            for visit in range(min_visits, diag_idx + 1):
                 try:
-                    X = df_trunc.loc[[idx], md['model'].feature_names_in_]
-                    X_proc = md['scaler'].transform(md['imputer'].transform(X))
-                    proba = md['model'].predict_proba(X_proc)[0, 1]
+                    trunc = create_delta_features_truncated(row_df, max_visit=visit)
+                    # Align columns to training features
+                    for col in feature_names:
+                        if col not in trunc.columns:
+                            trunc[col] = np.nan
+                    X = trunc[feature_names].values
+                    X_proc = scaler.transform(imputer.transform(X))
+                    proba = model.predict_proba(X_proc)[0, 1]
                     if proba >= threshold:
                         lead_times.append(diag_time - months[visit - 1])
                         break
@@ -1398,3 +1421,120 @@ def evaluate_lead_time(df, models_dict, threshold, progression_type='MCI'):
             continue
 
     return lead_times
+
+
+def evaluate_lead_time_full(df, model, imputer, scaler, feature_names,
+                            threshold, progression_type='CN', min_visits=2):
+    """
+    Evaluate both progressors AND non-progressors on a lead-time cohort.
+
+    For progressors: checks whether the model flags them before diagnosis
+    and how early (lead time). For non-progressors: checks whether the
+    model incorrectly flags them (false positives) using all their visits.
+
+    Returns
+    -------
+    dict with keys:
+        'lead_times'       : list[float] — months of early detection per TP
+        'true_positives'   : int — progressors detected before diagnosis
+        'false_negatives'  : int — progressors NOT detected
+        'true_negatives'   : int — non-progressors correctly left alone
+        'false_positives'  : int — non-progressors incorrectly flagged
+        'total_progressors': int
+        'total_non_progressors': int
+        'sensitivity'      : float — TP / (TP + FN)
+        'specificity'      : float — TN / (TN + FP)
+        'fp_details'       : list[dict] — visit/proba info for each FP
+    """
+    prog_code = 2 if progression_type == 'AD' else 1
+
+    lead_times = []
+    tp = 0
+    fn = 0
+    tn = 0
+    fp = 0
+    fp_details = []
+    total_prog = 0
+    total_nonprog = 0
+
+    for idx, row in df.iterrows():
+        try:
+            progression = eval(row['Progression'])
+            months = row.get('months_since_baseline')
+            if not isinstance(months, list):
+                continue
+
+            diag_idx = next(
+                (i for i, c in enumerate(progression) if c >= prog_code), None)
+            is_progressor = diag_idx is not None
+
+            if is_progressor:
+                total_prog += 1
+                diag_time = months[diag_idx]
+                detected = False
+                row_df = df.loc[[idx]]
+                for visit in range(min_visits, diag_idx + 1):
+                    try:
+                        trunc = create_delta_features_truncated(row_df, max_visit=visit)
+                        for col in feature_names:
+                            if col not in trunc.columns:
+                                trunc[col] = np.nan
+                        X = trunc[feature_names].values
+                        X_proc = scaler.transform(imputer.transform(X))
+                        proba = model.predict_proba(X_proc)[0, 1]
+                        if proba >= threshold:
+                            lead_times.append(diag_time - months[visit - 1])
+                            tp += 1
+                            detected = True
+                            break
+                    except Exception:
+                        continue
+                if not detected:
+                    fn += 1
+            else:
+                # Non-progressor: run through ALL visits and check for false alarm
+                total_nonprog += 1
+                flagged = False
+                row_df = df.loc[[idx]]
+                n_visits = len(progression)
+                for visit in range(min_visits, n_visits + 1):
+                    try:
+                        trunc = create_delta_features_truncated(row_df, max_visit=visit)
+                        for col in feature_names:
+                            if col not in trunc.columns:
+                                trunc[col] = np.nan
+                        X = trunc[feature_names].values
+                        X_proc = scaler.transform(imputer.transform(X))
+                        proba = model.predict_proba(X_proc)[0, 1]
+                        if proba >= threshold:
+                            fp += 1
+                            fp_details.append({
+                                'patient_idx': idx,
+                                'flagged_at_visit': visit,
+                                'probability': round(float(proba), 3),
+                            })
+                            flagged = True
+                            break
+                    except Exception:
+                        continue
+                if not flagged:
+                    tn += 1
+
+        except Exception:
+            continue
+
+    sensitivity = tp / (tp + fn) if (tp + fn) > 0 else None
+    specificity = tn / (tn + fp) if (tn + fp) > 0 else None
+
+    return {
+        'lead_times': lead_times,
+        'true_positives': tp,
+        'false_negatives': fn,
+        'true_negatives': tn,
+        'false_positives': fp,
+        'total_progressors': total_prog,
+        'total_non_progressors': total_nonprog,
+        'sensitivity': sensitivity,
+        'specificity': specificity,
+        'fp_details': fp_details,
+    }
