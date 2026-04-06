@@ -531,8 +531,9 @@ def _get_progression(row):
         prog = eval(prog)
     return prog
 
-def _cn_mci_indices(df):
-    """Return iloc indices of rows containing label 0 (CN) in Progression → CN/MCI group."""
+def _cn_starting_indices(df):
+    """Return iloc indices of rows where label 0 (CN) appears in Progression.
+    This captures all CN-starting patients: stable CN, CN→MCI, CN→AD, CN→MCI→AD."""
     idx = []
     for i, (_, r) in enumerate(df.iterrows()):
         prog = _get_progression(r)
@@ -629,18 +630,28 @@ def run_pipeline(
 
     Outputs (written to *dest_dir*)
     -------
-    ``{N}visit_CN_MCI.csv``, ``{N}visit_MCI_AD.csv`` for 2–4 visits.
-    ``original_5visit_CN_MCI.csv``, ``original_5visit_MCI_AD.csv``.
-    ``5visit_CN_MCI.csv``, ``5visit_MCI_AD.csv`` (augmented with 6–10 slices).
-    ``reverters_CN_MCI.csv``, ``reverters_MCI_AD.csv`` (all reverters pooled).
+    ``pooled_CN.csv``          — 2–5 visit CN-starting patients (Prog_ID distinguishes prog/non-prog).
+    ``pooled_MCI_AD.csv``      — 2–5 visit MCI-starting patients.
+    ``lead_time_CN.csv``       — 6–10 visit CN-starting patients (full sequences).
+    ``lead_time_MCI_AD.csv``   — 6–10 visit MCI-starting patients (full sequences).
+    ``reverters_CN.csv``, ``reverters_MCI_AD.csv`` (all reverters pooled).
+
+    CN model inclusion
+    ------------------
+    CN-starting patients include anyone whose Progression contains label 0.
+    Progressors (Prog_ID=1) are those who reach MCI (1) or AD (2) at any visit.
+    Reverters (Prog_ID=1 but ending at 0) are excluded.
+
+    MCI→AD model is unchanged: starts MCI (no 0 in Progression), progressors reach AD (2).
     """
     os.makedirs(dest_dir, exist_ok=True)
     stats = {"bmi_dropped": {}, "mmse_dropped": {}, "age_dropped": {}}
-    reverters_cn_mci = []
+    reverters_cn = []
     reverters_mci_ad = []
-    new_5_cn_mci = pd.DataFrame()
-    new_5_mci_ad = pd.DataFrame()
-    lead_time_rows = []  # accumulates paired prog/non-prog rows from 6-10 visit files
+    pool_cn = []       # accumulates CN-starting DataFrames from 2–5 visit files
+    pool_mci_ad = []   # accumulates MCI-starting DataFrames from 2–5 visit files
+    lead_cn = []       # accumulates CN-starting DataFrames from 6–10 visit files (full sequences)
+    lead_mci_ad = []   # accumulates MCI-starting DataFrames from 6–10 visit files (full sequences)
 
     # --- MMSE tolerance map: visit_count → max allowed NaN -----------------
     mmse_tol = {2: 0, 3: 0, 4: 1, 5: 1, 6: 2, 7: 2, 8: 3, 9: 3, 10: 4}
@@ -733,157 +744,77 @@ def run_pipeline(
         if verbose:
             print(f"→ {len(df)} rows")
 
-        # ── 8. Split & save ───────────────────────────────────────────────
-        if n_visits <= 4:
-            cn_idx = _cn_mci_indices(df)
-            cn_mci = df.iloc[cn_idx]
-            mci_ad = df.drop(df.index[cn_idx])
+        # ── 8. Split into CN-starting vs MCI-starting ────────────────────
+        cn_idx = _cn_starting_indices(df)
+        cn_group = df.iloc[cn_idx].copy()
+        mci_group = df.drop(df.index[cn_idx]).copy()
 
-            # detect and remove reverters
-            rev_cm = _detect_reverters(cn_mci, 'CN_MCI')
-            rev_ma = _detect_reverters(mci_ad, 'MCI_AD')
-            if rev_cm:
-                reverters_cn_mci.append(cn_mci.iloc[rev_cm])
-                cn_mci = cn_mci.drop(cn_mci.index[rev_cm])
-            if rev_ma:
-                reverters_mci_ad.append(mci_ad.iloc[rev_ma])
-                mci_ad = mci_ad.drop(mci_ad.index[rev_ma])
+        # detect and remove reverters
+        rev_cn = _detect_reverters(cn_group, 'CN_MCI')
+        rev_ma = _detect_reverters(mci_group, 'MCI_AD')
+        if rev_cn:
+            reverters_cn.append(cn_group.iloc[rev_cn])
+            cn_group = cn_group.drop(cn_group.index[rev_cn])
+        if rev_ma:
+            reverters_mci_ad.append(mci_group.iloc[rev_ma])
+            mci_group = mci_group.drop(mci_group.index[rev_ma])
 
-            cn_mci.to_csv(os.path.join(dest_dir, f"{n_visits}visit_CN_MCI.csv"), index=False)
-            mci_ad.to_csv(os.path.join(dest_dir, f"{n_visits}visit_MCI_AD.csv"), index=False)
-
-        elif n_visits == 5:
-            cn_idx = _cn_mci_indices(df)
-            new_5_cn_mci = df.iloc[cn_idx].copy()
-            new_5_mci_ad = df.drop(df.index[cn_idx]).copy()
-
-            # detect and remove reverters
-            rev_cm = _detect_reverters(new_5_cn_mci, 'CN_MCI')
-            rev_ma = _detect_reverters(new_5_mci_ad, 'MCI_AD')
-            if rev_cm:
-                reverters_cn_mci.append(new_5_cn_mci.iloc[rev_cm])
-                new_5_cn_mci = new_5_cn_mci.drop(new_5_cn_mci.index[rev_cm])
-            if rev_ma:
-                reverters_mci_ad.append(new_5_mci_ad.iloc[rev_ma])
-                new_5_mci_ad = new_5_mci_ad.drop(new_5_mci_ad.index[rev_ma])
-
-            new_5_cn_mci.to_csv(os.path.join(dest_dir, "original_5visit_CN_MCI.csv"), index=False)
-            new_5_mci_ad.to_csv(os.path.join(dest_dir, "original_5visit_MCI_AD.csv"), index=False)
-
+        # ── 9. Route to pooled (2–5) or lead-time (6–10) accumulators ────
+        if n_visits <= 5:
+            if not cn_group.empty:
+                pool_cn.append(cn_group)
+            if not mci_group.empty:
+                pool_mci_ad.append(mci_group)
         else:
-            # 6–10 visits: slice to 5 time points and augment
-            sliced_cn = time_series_slicer(1, df, 5)
-            sliced_ma = time_series_slicer(0, df, 5)
+            # 6–10 visits: keep full sequences for lead-time testing
+            if not cn_group.empty:
+                lead_cn.append(cn_group)
+            if not mci_group.empty:
+                lead_mci_ad.append(mci_group)
 
-            # reverter check on sliced data
-            rev_cm = _detect_reverters(sliced_cn, 'CN_MCI')
-            rev_ma = _detect_reverters(sliced_ma, 'MCI_AD')
-            if rev_cm:
-                reverters_cn_mci.append(sliced_cn.iloc[rev_cm])
-                sliced_cn = sliced_cn.drop(sliced_cn.index[rev_cm])
-            if rev_ma:
-                reverters_mci_ad.append(sliced_ma.iloc[rev_ma])
-                sliced_ma = sliced_ma.drop(sliced_ma.index[rev_ma])
+    # ── Save pooled 2–5 visit datasets ────────────────────────────────────
+    if pool_cn:
+        pooled_cn_df = pd.concat(pool_cn, axis=0).reset_index(drop=True)
+        assert pooled_cn_df['ID'].is_unique, \
+            f"Duplicate IDs in pooled_CN: {pooled_cn_df['ID'][pooled_cn_df['ID'].duplicated()].tolist()}"
+        pooled_cn_df.to_csv(os.path.join(dest_dir, "pooled_CN.csv"), index=False)
+        if verbose:
+            n_prog = int((pooled_cn_df['Prog_ID'] == 1).sum())
+            print(f"  pooled_CN.csv: {len(pooled_cn_df)} rows "
+                  f"(prog: {n_prog}, non-prog: {len(pooled_cn_df) - n_prog})")
 
-            if not sliced_cn.empty:
-                new_5_cn_mci = pd.concat([new_5_cn_mci, sliced_cn], axis=0)
-            if not sliced_ma.empty:
-                new_5_mci_ad = pd.concat([new_5_mci_ad, sliced_ma], axis=0)
+    if pool_mci_ad:
+        pooled_mci_df = pd.concat(pool_mci_ad, axis=0).reset_index(drop=True)
+        assert pooled_mci_df['ID'].is_unique, \
+            f"Duplicate IDs in pooled_MCI_AD: {pooled_mci_df['ID'][pooled_mci_df['ID'].duplicated()].tolist()}"
+        pooled_mci_df.to_csv(os.path.join(dest_dir, "pooled_MCI_AD.csv"), index=False)
+        if verbose:
+            n_prog = int((pooled_mci_df['Prog_ID'] == 1).sum())
+            print(f"  pooled_MCI_AD.csv: {len(pooled_mci_df)} rows "
+                  f"(prog: {n_prog}, non-prog: {len(pooled_mci_df) - n_prog})")
 
-            # ── Lead-time dataset: balanced set of all four classes ──────
-            # sliced_cn  = CN→MCI progressors  (Prog has 0 & 1)
-            # sliced_ma  = MCI non-progressors  (Prog all 1s)
-            # We still need:
-            #   CN non-progressors   (Prog all 0s)
-            #   MCI→AD progressors   (Prog has 1 & 2)
-            # Both groups exist in the original df but aren't captured by
-            # time_series_slicer.  Extract them here, slice to 5 visits
-            # using the same first-5 window, then balance all four groups
-            # to the size of the smallest group.
+    # ── Save lead-time datasets (6–10 visits, full sequences) ─────────────
+    if lead_cn:
+        lead_cn_df = pd.concat(lead_cn, axis=0).reset_index(drop=True)
+        lead_cn_df.to_csv(os.path.join(dest_dir, "lead_time_CN.csv"), index=False)
+        if verbose:
+            n_prog = int((lead_cn_df['Prog_ID'] == 1).sum())
+            print(f"  lead_time_CN.csv: {len(lead_cn_df)} rows "
+                  f"(prog: {n_prog}, non-prog: {len(lead_cn_df) - n_prog})")
 
-            # ---- CN non-progressors: Progression is all 0 ----
-            cn_np_idx = []
-            for ii, (_, rr) in enumerate(df.iterrows()):
-                prog = _get_progression(rr)
-                if all(v == 0 for v in prog):
-                    cn_np_idx.append(ii)
-            cn_nonprog = df.iloc[cn_np_idx].copy()
-            if not cn_nonprog.empty:
-                # slice to first 5 visits (same as slicer target_class=0 logic)
-                _slice_first_n(cn_nonprog, 5)
-
-            # ---- MCI→AD progressors: Progression has 1 and 2 ----
-            mci_prog_idx = []
-            for ii, (_, rr) in enumerate(df.iterrows()):
-                prog = _get_progression(rr)
-                if 1 in prog and 2 in prog:
-                    mci_prog_idx.append(ii)
-            mci_prog = df.iloc[mci_prog_idx].copy()
-            if not mci_prog.empty:
-                # slice: if progression to AD within first 5 visits use those,
-                # else use the window ending at first AD visit
-                _slice_progressor(mci_prog, 5, target_label=2)
-
-            # Remove reverters from new groups
-            rev_cn_np = _detect_reverters(cn_nonprog, 'CN_MCI') if not cn_nonprog.empty else []
-            rev_mci_p = _detect_reverters(mci_prog, 'MCI_AD') if not mci_prog.empty else []
-            if rev_cn_np:
-                cn_nonprog = cn_nonprog.drop(cn_nonprog.index[rev_cn_np])
-            if rev_mci_p:
-                mci_prog = mci_prog.drop(mci_prog.index[rev_mci_p])
-
-            # Balance all four groups to the smallest non-empty group size
-            groups = {
-                'CN_nonprog': cn_nonprog,
-                'CN_prog': sliced_cn,
-                'MCI_nonprog': sliced_ma,
-                'MCI_prog': mci_prog,
-            }
-            sizes = {k: len(v) for k, v in groups.items() if not v.empty}
-            if sizes:
-                min_size = min(sizes.values())
-                balanced = []
-                for k, grp in groups.items():
-                    if not grp.empty:
-                        balanced.append(grp.sample(n=min(min_size, len(grp)), random_state=42))
-                if balanced:
-                    lead_time_rows.append(pd.concat(balanced, axis=0))
-
-    # ── Save combined 5-visit datasets ────────────────────────────────────
-    if not new_5_cn_mci.empty:
-        new_5_cn_mci.to_csv(os.path.join(dest_dir, "5visit_CN_MCI.csv"), index=False)
-    if not new_5_mci_ad.empty:
-        new_5_mci_ad.to_csv(os.path.join(dest_dir, "5visit_MCI_AD.csv"), index=False)
+    if lead_mci_ad:
+        lead_mci_df = pd.concat(lead_mci_ad, axis=0).reset_index(drop=True)
+        lead_mci_df.to_csv(os.path.join(dest_dir, "lead_time_MCI_AD.csv"), index=False)
+        if verbose:
+            n_prog = int((lead_mci_df['Prog_ID'] == 1).sum())
+            print(f"  lead_time_MCI_AD.csv: {len(lead_mci_df)} rows "
+                  f"(prog: {n_prog}, non-prog: {len(lead_mci_df) - n_prog})")
 
     # ── Save reverters ────────────────────────────────────────────────────
-    if reverters_cn_mci:
-        pd.concat(reverters_cn_mci).to_csv(os.path.join(dest_dir, "reverters_CN_MCI.csv"), index=False)
+    if reverters_cn:
+        pd.concat(reverters_cn).to_csv(os.path.join(dest_dir, "reverters_CN.csv"), index=False)
     if reverters_mci_ad:
         pd.concat(reverters_mci_ad).to_csv(os.path.join(dest_dir, "reverters_MCI_AD.csv"), index=False)
-
-    # ── Save lead-time dataset ────────────────────────────────────────────
-    if lead_time_rows:
-        lead_time_df = pd.concat(lead_time_rows, axis=0).reset_index(drop=True)
-        lead_time_df.to_csv(os.path.join(dest_dir, "lead_time.csv"), index=False)
-        if verbose:
-            # Four-class breakdown
-            def _lt_class(row):
-                prog = _get_progression(row)
-                pid = row['Prog_ID']
-                if isinstance(pid, str):
-                    pid = eval(pid)
-                if pid == 0 and all(v == 0 for v in prog):
-                    return 'CN_nonprog'
-                if pid == 1 and 0 in prog and 1 in prog:
-                    return 'CN_prog'
-                if pid == 0 and all(v == 1 for v in prog):
-                    return 'MCI_nonprog'
-                if pid == 1 and 1 in prog and 2 in prog:
-                    return 'MCI_prog'
-                return 'other'
-            cls = lead_time_df.apply(_lt_class, axis=1).value_counts()
-            print(f"  lead_time.csv: {len(lead_time_df)} rows — "
-                  + ", ".join(f"{k}: {v}" for k, v in cls.items()))
 
     # ── Summary ───────────────────────────────────────────────────────────
     if verbose:
@@ -892,11 +823,9 @@ def run_pipeline(
             for f, n in stats[key].items():
                 if n:
                     print(f"  {f}: {n} rows ({key.replace('_', ' ')})")
-        n_rev_cm = sum(len(r) for r in reverters_cn_mci) if reverters_cn_mci else 0
+        n_rev_cn = sum(len(r) for r in reverters_cn) if reverters_cn else 0
         n_rev_ma = sum(len(r) for r in reverters_mci_ad) if reverters_mci_ad else 0
-        print(f"  Reverters saved — CN/MCI: {n_rev_cm}, MCI/AD: {n_rev_ma}")
-        n_lt = len(pd.concat(lead_time_rows)) if lead_time_rows else 0
-        print(f"  lead_time.csv: {n_lt} rows from 6-10 visit cohorts")
+        print(f"  Reverters saved — CN: {n_rev_cn}, MCI/AD: {n_rev_ma}")
         print(f"\n✓ Output written to {dest_dir}/")
 
     return stats

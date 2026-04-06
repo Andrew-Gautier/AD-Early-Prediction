@@ -63,10 +63,14 @@ def create_target_variable_ad(row):
     """Create binary target from Progression column (1=progressed, 0=stable)"""
     progression = eval(row['Progression'])  # Convert string tuple to actual tuple
     return 1 if 2 in progression else 0  # 1 if progressed to AD at any visit
-def create_target_variable_mci(row):
-    """Create binary target from Progression column (1=progressed, 0=stable)"""
+def create_target_variable_cn(row):
+    """Create binary target for CN-starting patients.
+    1 = progressed to MCI (1) or AD (2) at any visit, 0 = stable CN."""
     progression = eval(row['Progression'])  # Convert string tuple to actual tuple
-    return 1 if 1 in progression else 0  # 1 if progressed to AD at any visit
+    return 1 if any(v > 0 for v in progression) else 0
+
+# Keep old name as alias for backwards compatibility
+create_target_variable_mci = create_target_variable_cn
 def create_delta_features(df):
     """
     Enhanced version that:
@@ -284,8 +288,8 @@ def preprocess_data(df, progression_type):
     if 'target' not in df.columns:
         if progression_type == 'AD':
             df['target'] = df.apply(create_target_variable_ad, axis=1)
-        elif progression_type == 'MCI':
-            df['target'] = df.apply(create_target_variable_mci, axis=1)
+        elif progression_type in ('MCI', 'CN'):
+            df['target'] = df.apply(create_target_variable_cn, axis=1)
     
     # Get all available features (after create_delta_features transformation)
     all_features = [col for col in df.columns if col != 'target']
@@ -299,7 +303,10 @@ def preprocess_data(df, progression_type):
     ]
     
     # Time-series features (we'll keep all of them)
-    time_series_features = [col for col in all_features if '_V' in col or '_delta_' in col or '_slope' in col or '_mean' in col or '_max' in col]
+    # Matches per-visit (_V), delta, and summary features (slope, mean, max, min, std, etc.)
+    _TS_SUFFIXES = ('_V', '_delta_', '_slope', '_mean', '_max', '_min', '_std',
+                    '_range', '_first', '_last', '_last_minus_first', '_n_visits')
+    time_series_features = [col for col in all_features if any(s in col for s in _TS_SUFFIXES)]
     
     # Only keep features that actually exist in the dataframe
     static_features = [f for f in static_features if f in df.columns]
