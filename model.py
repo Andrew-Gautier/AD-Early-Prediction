@@ -44,12 +44,13 @@ def _get_cat_indices(feature_names):
     """Return column indices of categorical features within the feature array."""
     return [i for i, f in enumerate(feature_names) if f in CATEGORICAL_COLS]
 
-def _apply_smotenc(X_train, y_train, cat_indices):
+def _apply_smotenc(X_train, y_train, cat_indices, k_neighbors=3):
     """Apply SMOTENC to oversample the minority class in the training set.
     Returns (X_resampled, y_resampled). Falls back to original data if SMOTE fails."""
     try:
         min_class_count = int(np.bincount(y_train.astype(int)).min())
-        k = min(3, min_class_count - 1) if min_class_count > 1 else 1
+        k = min(k_neighbors, min_class_count - 1) if min_class_count > 1 else 1
+        #print(f"Applying SMOTENC with k_neighbors={k} (min class count: {min_class_count})...")
         sm = SMOTENC(categorical_features=cat_indices, k_neighbors=k, random_state=42)
         X_res, y_res = sm.fit_resample(X_train, y_train)
         return X_res, y_res
@@ -427,7 +428,7 @@ def split_dataset(data):
     return X_train.values, X_test.values, y_train.values, y_test.values
 
 # For the training of the best model with the best set of hyperparameters, prints out the whole performance report.
-def build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_names, use_smote=True):
+def build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_names, use_smote=True, k_neighbors=3):
     
     # Fit imputer/scaler on training set only (avoid leakage)
     imputer = SimpleImputer(strategy='mean')
@@ -438,8 +439,8 @@ def build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_name
     # Optionally apply SMOTENC on processed training data to handle class imbalance
     if use_smote:
         cat_indices = _get_cat_indices(feature_names)
-        X_train_res, y_train_res = _apply_smotenc(X_train_proc, y_train, cat_indices)
-        print(f"SMOTE resampling: {len(y_train)} -> {len(y_train_res)} training samples")
+        X_train_res, y_train_res = _apply_smotenc(X_train_proc, y_train, cat_indices, k_neighbors=k_neighbors)
+        print(f"SMOTE resampling: {len(y_train)} -> {len(y_train_res)} training samples. k_neighbors={k_neighbors}")
         spw = 1.0
     else:
         X_train_res, y_train_res = X_train_proc, y_train
@@ -511,7 +512,7 @@ def build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_name
     return model, feature_names, imputer, scaler, summary
 
 # To train models for cross-validation. Returns only AUC score. Does not print out anything.
-def build_model(X_train, X_test, y_train, y_test, model_dict, feature_names, use_smote=True, xgb_n_jobs=None):
+def build_model(X_train, X_test, y_train, y_test, model_dict, feature_names, use_smote=True, xgb_n_jobs=None, k_neighbors=3):
     
     # Per-fold imputation/scaling fit on training fold only (avoid leakage)
     imputer = SimpleImputer(strategy='mean')
@@ -522,7 +523,7 @@ def build_model(X_train, X_test, y_train, y_test, model_dict, feature_names, use
     # Optionally apply SMOTENC on processed training fold to handle class imbalance
     if use_smote:
         cat_indices = _get_cat_indices(feature_names)
-        X_train_res, y_train_res = _apply_smotenc(X_train_proc, y_train, cat_indices)
+        X_train_res, y_train_res = _apply_smotenc(X_train_proc, y_train, cat_indices, k_neighbors=k_neighbors)
         spw = 1.0
     else:
         X_train_res, y_train_res = X_train_proc, y_train
@@ -554,7 +555,7 @@ def build_model(X_train, X_test, y_train, y_test, model_dict, feature_names, use
 
 
 def _loocv_fold(fold_idx, df_with_target, covariates, mmse_needs_imputation,
-                hyperparams, use_smote, progression_type):
+                hyperparams, use_smote, progression_type, k_neighbors=3,):
     """Run one LOO fold from raw data through prediction.
 
     The full pipeline (MMSE imputation -> delta features -> preprocess ->
@@ -613,7 +614,7 @@ def _loocv_fold(fold_idx, df_with_target, covariates, mmse_needs_imputation,
     # 8. Optional SMOTE
     if use_smote:
         cat_idx = _get_cat_indices(feat_names)
-        X_tr, y_tr = _apply_smotenc(X_tr, y_tr, cat_idx)
+        X_tr, y_tr = _apply_smotenc(X_tr, y_tr, cat_idx, k_neighbors=k_neighbors)
 
     # 9. Train + predict
     # When SMOTE is disabled (Mode A), compute scale_pos_weight from the N-1
@@ -641,7 +642,7 @@ def _loocv_fold(fold_idx, df_with_target, covariates, mmse_needs_imputation,
 
 
 def _eval_loocv_combo_pipeline(combo, df_with_target, covariates,
-                                mmse_needs_imputation, use_smote, progression_type):
+                                mmse_needs_imputation, use_smote, progression_type, k_neighbors=3):
     """Evaluate one hyperparameter combo across all LOO folds (full pipeline per fold).
     Returns result tuple: (n_est, max_depth, lr, subsample, colsample, auc_score).
     """
@@ -651,7 +652,7 @@ def _eval_loocv_combo_pipeline(combo, df_with_target, covariates,
     for i in range(n_samples):
         results.append(_loocv_fold(
             i, df_with_target, covariates, mmse_needs_imputation,
-            combo, use_smote, progression_type,
+            combo, use_smote, progression_type, k_neighbors=k_neighbors,
         ))
     y_true  = np.array([r[0] for r in results])
     y_score = np.array([r[1] for r in results])
@@ -664,7 +665,7 @@ def _eval_loocv_combo_pipeline(combo, df_with_target, covariates,
 
 def _loocv_final_evaluation(df_with_target, best_params, covariates,
                              mmse_needs_imputation, use_smote, progression_type,
-                             n_jobs=1):
+                             n_jobs=1, k_neighbors=3):
     """Re-run LOOCV with best hyperparameters; print full report with bootstrap CIs.
     Returns a summary dict compatible with the report writer in train_best_model.
 
@@ -681,14 +682,14 @@ def _loocv_final_evaluation(df_with_target, best_params, covariates,
         for i in tqdm(range(n_samples), desc="LOOCV final evaluation", unit="fold"):
             results.append(_loocv_fold(
                 i, df_with_target, covariates, mmse_needs_imputation,
-                combo, use_smote, progression_type,
+                combo, use_smote, progression_type, k_neighbors=k_neighbors,
             ))
     else:
         print(f"Running LOOCV final evaluation in parallel (n_jobs={n_jobs}, {n_samples} folds)...")
         results = Parallel(n_jobs=n_jobs)(
             delayed(_loocv_fold)(
                 i, df_with_target, covariates, mmse_needs_imputation,
-                combo, use_smote, progression_type,
+                combo, use_smote, progression_type, k_neighbors=k_neighbors,
             )
             for i in tqdm(range(n_samples), desc="LOOCV final evaluation", unit="fold")
         )
@@ -745,7 +746,7 @@ def _loocv_final_evaluation(df_with_target, best_params, covariates,
     }
 
 
-def _eval_skf_combo(combo, list_x_train, list_x_test, list_y_train, list_y_test, n_splits, feature_names, use_smote):
+def _eval_skf_combo(combo, list_x_train, list_x_test, list_y_train, list_y_test, n_splits, feature_names, use_smote, k_neighbors=3):
     """Evaluate one hyperparameter combo across K folds. Returns result tuple."""
     n_estimators, max_depth, learning_rate, subsample, colsample_bytree = combo
     model_dict = {
@@ -761,7 +762,7 @@ def _eval_skf_combo(combo, list_x_train, list_x_test, list_y_train, list_y_test,
             list_x_train[i], list_x_test[i],
             list_y_train[i], list_y_test[i],
             model_dict, feature_names,
-            use_smote=use_smote, xgb_n_jobs=1,
+            use_smote=use_smote, xgb_n_jobs=1, k_neighbors=k_neighbors,
         )
     score = score_sum / n_splits
     return (n_estimators, max_depth, learning_rate, subsample, colsample_bytree, score)
@@ -775,8 +776,9 @@ def _eval_skf_combo(combo, list_x_train, list_x_test, list_y_train, list_y_test,
 #             'loocv' → Leave-One-Out CV
 # use_smote : whether to oversample the minority class inside each CV fold/iteration
 # n_jobs    : number of parallel workers for evaluating hyperparameter combos (1 = serial)
+# k_neighbors : k parameter for SMOTENC
 def grid_search(x, y, param_grid, csv_path, feature_names, cv_method='skf', use_smote=True, n_jobs=1,
-                df_raw=None, covariates=None, mmse_needs_imputation=False, progression_type=None):
+                df_raw=None, covariates=None, mmse_needs_imputation=False, progression_type=None, k_neighbors=3):
     best_hyperparameters = None
     best_score = 0
 
@@ -791,7 +793,7 @@ def grid_search(x, y, param_grid, csv_path, feature_names, cv_method='skf', use_
 
         results = Parallel(n_jobs=n_jobs, return_as='generator')(
             delayed(_eval_loocv_combo_pipeline)(
-                combo, df_raw, covariates, mmse_needs_imputation, use_smote, progression_type,
+                combo, df_raw, covariates, mmse_needs_imputation, use_smote, progression_type, k_neighbors=k_neighbors,
             )
             for combo in all_combos
         )
@@ -833,7 +835,7 @@ def grid_search(x, y, param_grid, csv_path, feature_names, cv_method='skf', use_
         print(f"Grid search: {total_combos} hyperparameter combinations (n_jobs={n_jobs})")
 
         results = Parallel(n_jobs=n_jobs, return_as='generator')(
-            delayed(_eval_skf_combo)(combo, list_x_train, list_x_test, list_y_train, list_y_test, n_splits, feature_names, use_smote)
+            delayed(_eval_skf_combo)(combo, list_x_train, list_x_test, list_y_train, list_y_test, n_splits, feature_names, use_smote, k_neighbors=k_neighbors)
             for combo in all_combos
         )
         scores = []
@@ -859,12 +861,13 @@ def grid_search(x, y, param_grid, csv_path, feature_names, cv_method='skf', use_
 # cv_method  : 'skf'   → StratifiedKFold grid search (default)
 #              'loocv' → Leave-One-Out CV grid search
 # use_smote  : whether to apply SMOTENC inside each CV fold (grid search) and in the final model
+# k_neighbors : k parameter for SMOTENC
 #
 # LOOCV modes:
 #   Mode A (loocv + no SMOTE) : no train/test split; LOOCV on full dataset IS the evaluation.
 #   Mode B (loocv + SMOTE)    : 80/20 split; LOOCV grid search on training set (per-fold MMSE);
 #                                final model evaluated on holdout via build_model_final.
-def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="saved_models", model_base_name=None, save_artifacts=True, cv_method='skf', use_smote=True, n_jobs=1):
+def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="saved_models", model_base_name=None, save_artifacts=True, cv_method='skf', use_smote=True, n_jobs=1, k_neighbors=3):
     
     dataset = dataset.copy()
 
@@ -896,14 +899,14 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
             cv_method='loocv', use_smote=False, n_jobs=n_jobs,
             df_raw=dataset, covariates=covariates,
             mmse_needs_imputation=mmse_needs_imputation,
-            progression_type=progression_type,
+            progression_type=progression_type, k_neighbors=k_neighbors,
         )
 
         # Final evaluation: re-run LOOCV with best hyperparameters
         summary = _loocv_final_evaluation(
             dataset, model_dict, covariates, mmse_needs_imputation,
             use_smote=False, progression_type=progression_type,
-            n_jobs=n_jobs,
+            n_jobs=n_jobs, k_neighbors=k_neighbors,
         )
 
         # Save report only (LOOCV produces N models; no single model to persist)
@@ -998,7 +1001,7 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
 
         # --- Final model trained on full processed training set, evaluated on holdout ---
         model, columns, imputer, scaler, summary = build_model_final(
-            X_train, X_test, y_train, y_test, model_dict, feature_names, use_smote=True,
+            X_train, X_test, y_train, y_test, model_dict, feature_names, use_smote=True, k_neighbors=k_neighbors,
         )
 
         try:
@@ -1104,10 +1107,10 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
         y_test = processed_test['target'].values
 
         # --- Step 5: Grid search (uses SMOTE inside each CV fold) ---
-        model_dict = grid_search(X_train, y_train, param_grid, csv_path, feature_names, cv_method=cv_method, use_smote=use_smote, n_jobs=n_jobs)
+        model_dict = grid_search(X_train, y_train, param_grid, csv_path, feature_names, cv_method=cv_method, use_smote=use_smote, n_jobs=n_jobs, k_neighbors=k_neighbors)
 
         # --- Step 6: Final model with full report ---
-        model, columns, imputer, scaler, summary = build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_names, use_smote=use_smote)
+        model, columns, imputer, scaler, summary = build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_names, use_smote=use_smote, k_neighbors=k_neighbors)
 
         try:
             model.feature_names_in_ = np.array(columns)
