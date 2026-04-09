@@ -1,0 +1,2 @@
+n_estimators,max_depth,learning_rate,subsample,colsample_bytree,avg AUC score
+400,3,0.01,0.6,1.0,0.8486374017960706
