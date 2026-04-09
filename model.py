@@ -567,6 +567,7 @@ def _loocv_fold(fold_idx, df_with_target, covariates, mmse_needs_imputation,
 
     Returns (true_label, predicted_proba, predicted_class).
     """
+    warnings.filterwarnings('ignore')
     n_est, max_depth, lr, subsample, colsample = hyperparams
 
     # 1. train / test split
@@ -646,7 +647,7 @@ def _loocv_fold(fold_idx, df_with_target, covariates, mmse_needs_imputation,
 
 def _eval_loocv_combo_pipeline(combo, df_with_target, covariates,
                                 mmse_needs_imputation, use_smote, progression_type, k_neighbors=3,
-                                n_jobs_folds=1, mmse_only=False):
+                                n_jobs_folds=1, mmse_only=False, combo_label=None):
     """Evaluate one hyperparameter combo across all LOO folds (full pipeline per fold).
     Returns result tuple: (n_est, max_depth, lr, subsample, colsample, auc_score).
 
@@ -655,9 +656,12 @@ def _eval_loocv_combo_pipeline(combo, df_with_target, covariates,
         1 = serial (default). -1 = use all available CPUs.
         Note: when this function is itself called inside an outer Parallel (combo-level),
         joblib will clamp this to 1 automatically to avoid over-subscription.
+    combo_label : str or None
+        Optional label for the tqdm fold progress bar (e.g. '3/36').
     """
     warnings.filterwarnings('ignore')
     n_samples = len(df_with_target)
+    fold_desc = f"Folds ({combo_label})" if combo_label else "Folds"
     if n_jobs_folds == 1:
         results = [
             _loocv_fold(
@@ -665,17 +669,24 @@ def _eval_loocv_combo_pipeline(combo, df_with_target, covariates,
                 combo, use_smote, progression_type, k_neighbors=k_neighbors,
                 mmse_only=mmse_only,
             )
-            for i in range(n_samples)
+            for i in tqdm(range(n_samples), desc=fold_desc, unit="fold", leave=False, position=1)
         ]
     else:
-        results = Parallel(n_jobs=n_jobs_folds)(
-            delayed(_loocv_fold)(
-                i, df_with_target, covariates, mmse_needs_imputation,
-                combo, use_smote, progression_type, k_neighbors=k_neighbors,
-                mmse_only=mmse_only,
-            )
-            for i in range(n_samples)
-        )
+        results = list(tqdm(
+            Parallel(n_jobs=n_jobs_folds, return_as='generator')(
+                delayed(_loocv_fold)(
+                    i, df_with_target, covariates, mmse_needs_imputation,
+                    combo, use_smote, progression_type, k_neighbors=k_neighbors,
+                    mmse_only=mmse_only,
+                )
+                for i in range(n_samples)
+            ),
+            total=n_samples,
+            desc=fold_desc,
+            unit="fold",
+            leave=False,
+            position=1,
+        ))
     y_true  = np.array([r[0] for r in results])
     y_score = np.array([r[1] for r in results])
     try:
@@ -833,11 +844,13 @@ def grid_search(x, y, param_grid, csv_path, feature_names, cv_method='skf', use_
             # Serial over combos — fold-level Parallel(n_jobs_folds) has full CPU access.
             # Using a plain loop avoids creating a joblib nesting context that would
             # silently clamp the inner Parallel to 1 worker.
-            with tqdm(total=total_combos, desc="LOOCV grid search", unit="combo") as pbar:
-                for combo in all_combos:
+            with tqdm(total=total_combos, desc="LOOCV grid search", unit="combo", position=0) as pbar:
+                for idx, combo in enumerate(all_combos):
+                    combo_label = f"{idx+1}/{total_combos}"
                     result = _eval_loocv_combo_pipeline(
                         combo, df_raw, covariates, mmse_needs_imputation, use_smote, progression_type,
                         k_neighbors=k_neighbors, n_jobs_folds=n_jobs_folds, mmse_only=mmse_only,
+                        combo_label=combo_label,
                     )
                     scores.append(list(result))
                     if result[5] > best_score:
@@ -952,6 +965,9 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
         print(f"Mode A: LOOCV without SMOTE — full dataset ({len(dataset)} samples)")
         print(f"MMSE imputation: {'per-fold (fit on N-1)' if mmse_needs_imputation else 'not needed'}")
         print(f"{'='*60}")
+
+        # Suppress noisy warnings (convergence, deprecation, etc.) during grid search
+        warnings.filterwarnings('ignore')
 
         # Grid search with per-fold pipeline (MMSE imputed inside each LOO fold)
         model_dict = grid_search(
