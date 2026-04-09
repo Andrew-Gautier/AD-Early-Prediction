@@ -279,6 +279,13 @@ def transform_mmse(df, covariates, fitted_imputer):
     The imputer must have been fit via fit_mmse_imputer() on the training set.
     """
     mmse_matrix, combined_data, n_mmse_cols, orig_lengths = _build_mmse_matrix(df, covariates)
+    # The test set may have fewer visits than the training set (pooled datasets have
+    # variable visit counts).  Pad extra columns with NaN so the fitted imputer —
+    # which expects training-set feature width — does not raise a shape mismatch.
+    n_expected = fitted_imputer.n_features_in_
+    if combined_data.shape[1] < n_expected:
+        pad = np.full((combined_data.shape[0], n_expected - combined_data.shape[1]), np.nan)
+        combined_data = np.hstack([combined_data, pad])
     imputed_data = fitted_imputer.transform(combined_data)
     imputed_mmse = imputed_data[:, :n_mmse_cols]
     df = df.copy()

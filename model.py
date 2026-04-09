@@ -329,7 +329,7 @@ def bootstrap_all_metrics_ci(
     return results
 
 # Preprocess the data
-def preprocess_data(df, progression_type):
+def preprocess_data(df, progression_type, mmse_only=False):
     # Create target variable if not already present
     if 'target' not in df.columns:
         if progression_type == 'AD':
@@ -358,7 +358,10 @@ def preprocess_data(df, progression_type):
     static_features = [f for f in static_features if f in df.columns]
     
     # Combine all features
-    features = static_features + time_series_features
+    if mmse_only:
+        features = [col for col in all_features if col.startswith('MMSE_')]
+    else:
+        features = static_features + time_series_features
     
     # Handle missing values
     df = df[features + ['target']].copy()
@@ -555,7 +558,7 @@ def build_model(X_train, X_test, y_train, y_test, model_dict, feature_names, use
 
 
 def _loocv_fold(fold_idx, df_with_target, covariates, mmse_needs_imputation,
-                hyperparams, use_smote, progression_type, k_neighbors=3,):
+                hyperparams, use_smote, progression_type, k_neighbors=3, mmse_only=False):
     """Run one LOO fold from raw data through prediction.
 
     The full pipeline (MMSE imputation -> delta features -> preprocess ->
@@ -591,8 +594,8 @@ def _loocv_fold(fold_idx, df_with_target, covariates, mmse_needs_imputation,
     # 5. Re-attach targets for preprocess_data
     df_train['target'] = y_tr
     df_test['target']  = y_te_val
-    processed_train, _, _ = preprocess_data(df_train, progression_type)
-    processed_test,  _, _ = preprocess_data(df_test, progression_type)
+    processed_train, _, _ = preprocess_data(df_train, progression_type, mmse_only=mmse_only)
+    processed_test,  _, _ = preprocess_data(df_test, progression_type, mmse_only=mmse_only)
 
     # 6. Align columns (test may lack some delta columns present in train)
     feat_names = [c for c in processed_train.columns if c != 'target']
@@ -642,18 +645,37 @@ def _loocv_fold(fold_idx, df_with_target, covariates, mmse_needs_imputation,
 
 
 def _eval_loocv_combo_pipeline(combo, df_with_target, covariates,
-                                mmse_needs_imputation, use_smote, progression_type, k_neighbors=3):
+                                mmse_needs_imputation, use_smote, progression_type, k_neighbors=3,
+                                n_jobs_folds=1, mmse_only=False):
     """Evaluate one hyperparameter combo across all LOO folds (full pipeline per fold).
     Returns result tuple: (n_est, max_depth, lr, subsample, colsample, auc_score).
+
+    n_jobs_folds : int
+        Number of parallel workers for fold evaluation within this combo.
+        1 = serial (default). -1 = use all available CPUs.
+        Note: when this function is itself called inside an outer Parallel (combo-level),
+        joblib will clamp this to 1 automatically to avoid over-subscription.
     """
     warnings.filterwarnings('ignore')
     n_samples = len(df_with_target)
-    results = []
-    for i in range(n_samples):
-        results.append(_loocv_fold(
-            i, df_with_target, covariates, mmse_needs_imputation,
-            combo, use_smote, progression_type, k_neighbors=k_neighbors,
-        ))
+    if n_jobs_folds == 1:
+        results = [
+            _loocv_fold(
+                i, df_with_target, covariates, mmse_needs_imputation,
+                combo, use_smote, progression_type, k_neighbors=k_neighbors,
+                mmse_only=mmse_only,
+            )
+            for i in range(n_samples)
+        ]
+    else:
+        results = Parallel(n_jobs=n_jobs_folds)(
+            delayed(_loocv_fold)(
+                i, df_with_target, covariates, mmse_needs_imputation,
+                combo, use_smote, progression_type, k_neighbors=k_neighbors,
+                mmse_only=mmse_only,
+            )
+            for i in range(n_samples)
+        )
     y_true  = np.array([r[0] for r in results])
     y_score = np.array([r[1] for r in results])
     try:
@@ -665,7 +687,7 @@ def _eval_loocv_combo_pipeline(combo, df_with_target, covariates,
 
 def _loocv_final_evaluation(df_with_target, best_params, covariates,
                              mmse_needs_imputation, use_smote, progression_type,
-                             n_jobs=1, k_neighbors=3):
+                             n_jobs=1, k_neighbors=3, mmse_only=False):
     """Re-run LOOCV with best hyperparameters; print full report with bootstrap CIs.
     Returns a summary dict compatible with the report writer in train_best_model.
 
@@ -683,16 +705,25 @@ def _loocv_final_evaluation(df_with_target, best_params, covariates,
             results.append(_loocv_fold(
                 i, df_with_target, covariates, mmse_needs_imputation,
                 combo, use_smote, progression_type, k_neighbors=k_neighbors,
+                mmse_only=mmse_only,
             ))
     else:
         print(f"Running LOOCV final evaluation in parallel (n_jobs={n_jobs}, {n_samples} folds)...")
-        results = Parallel(n_jobs=n_jobs)(
-            delayed(_loocv_fold)(
-                i, df_with_target, covariates, mmse_needs_imputation,
-                combo, use_smote, progression_type, k_neighbors=k_neighbors,
-            )
-            for i in tqdm(range(n_samples), desc="LOOCV final evaluation", unit="fold")
-        )
+        # Wrap the *result* generator with tqdm so the bar advances as folds complete,
+        # not as tasks are dispatched (which would rush to 100% immediately).
+        results = list(tqdm(
+            Parallel(n_jobs=n_jobs, return_as='generator')(
+                delayed(_loocv_fold)(
+                    i, df_with_target, covariates, mmse_needs_imputation,
+                    combo, use_smote, progression_type, k_neighbors=k_neighbors,
+                    mmse_only=mmse_only,
+                )
+                for i in range(n_samples)
+            ),
+            total=n_samples,
+            desc="LOOCV final evaluation",
+            unit="fold",
+        ))
 
     y_true  = np.array([r[0] for r in results])
     y_proba = np.array([r[1] for r in results])
@@ -772,13 +803,18 @@ def _eval_skf_combo(combo, list_x_train, list_x_test, list_y_train, list_y_test,
 # Return the set of best hyperparameters and save cross-validation scores to the given csv path.
 # A helper method for train_best_model(...)
 #
-# cv_method : 'skf'   → StratifiedKFold (default)
-#             'loocv' → Leave-One-Out CV
-# use_smote : whether to oversample the minority class inside each CV fold/iteration
-# n_jobs    : number of parallel workers for evaluating hyperparameter combos (1 = serial)
-# k_neighbors : k parameter for SMOTENC
+# cv_method    : 'skf'   → StratifiedKFold (default)
+#                'loocv' → Leave-One-Out CV
+# use_smote    : whether to oversample the minority class inside each CV fold/iteration
+# n_jobs       : number of parallel workers for evaluating hyperparameter combos (1 = serial)
+# n_jobs_folds : number of parallel workers for LOO folds within each combo (1 = serial).
+#                Ignored by the SKF branch. When n_jobs > 1 AND n_jobs_folds != 1 the two
+#                axes run concurrently; joblib's loky backend clamps inner workers to avoid
+#                runaway over-subscription, but prefer using only one axis at a time.
+# k_neighbors  : k parameter for SMOTENC
 def grid_search(x, y, param_grid, csv_path, feature_names, cv_method='skf', use_smote=True, n_jobs=1,
-                df_raw=None, covariates=None, mmse_needs_imputation=False, progression_type=None, k_neighbors=3):
+                df_raw=None, covariates=None, mmse_needs_imputation=False, progression_type=None,
+                k_neighbors=3, n_jobs_folds=1, mmse_only=False):
     best_hyperparameters = None
     best_score = 0
 
@@ -789,22 +825,42 @@ def grid_search(x, y, param_grid, csv_path, feature_names, cv_method='skf', use_
     # ── LOOCV branch (full pipeline per fold) ────────────────────────────────────
     if cv_method == 'loocv':
         n_samples = len(df_raw)
-        print(f"Using Leave-One-Out CV ({n_samples} iterations x {total_combos} combos, use_smote={use_smote}, n_jobs={n_jobs})")
+        print(f"Using Leave-One-Out CV ({n_samples} folds x {total_combos} combos, "
+              f"n_jobs(combos)={n_jobs}, n_jobs_folds={n_jobs_folds}, use_smote={use_smote})")
 
-        results = Parallel(n_jobs=n_jobs, return_as='generator')(
-            delayed(_eval_loocv_combo_pipeline)(
-                combo, df_raw, covariates, mmse_needs_imputation, use_smote, progression_type, k_neighbors=k_neighbors,
-            )
-            for combo in all_combos
-        )
         scores = []
-        with tqdm(total=total_combos, desc="LOOCV grid search", unit="combo") as pbar:
-            for result in results:
-                scores.append(list(result))
-                if result[5] > best_score:
-                    best_score = result[5]
-                    best_hyperparameters = dict(zip(combo_keys, result[:5]))
-                pbar.update(1)
+        if n_jobs == 1:
+            # Serial over combos — fold-level Parallel(n_jobs_folds) has full CPU access.
+            # Using a plain loop avoids creating a joblib nesting context that would
+            # silently clamp the inner Parallel to 1 worker.
+            with tqdm(total=total_combos, desc="LOOCV grid search", unit="combo") as pbar:
+                for combo in all_combos:
+                    result = _eval_loocv_combo_pipeline(
+                        combo, df_raw, covariates, mmse_needs_imputation, use_smote, progression_type,
+                        k_neighbors=k_neighbors, n_jobs_folds=n_jobs_folds, mmse_only=mmse_only,
+                    )
+                    scores.append(list(result))
+                    if result[5] > best_score:
+                        best_score = result[5]
+                        best_hyperparameters = dict(zip(combo_keys, result[:5]))
+                    pbar.update(1)
+        else:
+            # Parallel over combos — joblib's nesting guard auto-clamps any inner Parallel
+            # to 1 worker, so n_jobs_folds is forced serial here.
+            results = Parallel(n_jobs=n_jobs, return_as='generator')(
+                delayed(_eval_loocv_combo_pipeline)(
+                    combo, df_raw, covariates, mmse_needs_imputation, use_smote, progression_type,
+                    k_neighbors=k_neighbors, n_jobs_folds=1, mmse_only=mmse_only,
+                )
+                for combo in all_combos
+            )
+            with tqdm(total=total_combos, desc="LOOCV grid search", unit="combo") as pbar:
+                for result in results:
+                    scores.append(list(result))
+                    if result[5] > best_score:
+                        best_score = result[5]
+                        best_hyperparameters = dict(zip(combo_keys, result[:5]))
+                    pbar.update(1)
 
     # ── StratifiedKFold branch ───────────────────────────────────────────────────
     else:
@@ -867,7 +923,11 @@ def grid_search(x, y, param_grid, csv_path, feature_names, cv_method='skf', use_
 #   Mode A (loocv + no SMOTE) : no train/test split; LOOCV on full dataset IS the evaluation.
 #   Mode B (loocv + SMOTE)    : 80/20 split; LOOCV grid search on training set (per-fold MMSE);
 #                                final model evaluated on holdout via build_model_final.
-def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="saved_models", model_base_name=None, save_artifacts=True, cv_method='skf', use_smote=True, n_jobs=1, k_neighbors=3):
+# n_jobs_folds : (LOOCV only) parallel workers for LOO folds within each grid-search combo and
+#                the final LOOCV evaluation. 1 = serial (default). -1 = all CPUs.
+#                Combine with n_jobs=1 for fold-level-only parallelism (recommended), or
+#                leave at 1 and set n_jobs > 1 for combo-level-only parallelism.
+def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="saved_models", model_base_name=None, save_artifacts=True, cv_method='skf', use_smote=True, n_jobs=1, k_neighbors=3, n_jobs_folds=1, mmse_only=False):
     
     dataset = dataset.copy()
 
@@ -900,13 +960,14 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
             df_raw=dataset, covariates=covariates,
             mmse_needs_imputation=mmse_needs_imputation,
             progression_type=progression_type, k_neighbors=k_neighbors,
+            n_jobs_folds=n_jobs_folds, mmse_only=mmse_only,
         )
 
         # Final evaluation: re-run LOOCV with best hyperparameters
         summary = _loocv_final_evaluation(
             dataset, model_dict, covariates, mmse_needs_imputation,
             use_smote=False, progression_type=progression_type,
-            n_jobs=n_jobs, k_neighbors=k_neighbors,
+            n_jobs=n_jobs_folds, k_neighbors=k_neighbors, mmse_only=mmse_only,
         )
 
         # Save report only (LOOCV produces N models; no single model to persist)
@@ -976,8 +1037,8 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
         df_te_feat = create_delta_features(df_test_imputed.drop(columns=['target']))
         df_tr_feat['target'] = y_train_target
         df_te_feat['target'] = y_test_target
-        processed_train, _, _ = preprocess_data(df_tr_feat, progression_type)
-        processed_test,  _, _ = preprocess_data(df_te_feat, progression_type)
+        processed_train, _, _ = preprocess_data(df_tr_feat, progression_type, mmse_only=mmse_only)
+        processed_test,  _, _ = preprocess_data(df_te_feat, progression_type, mmse_only=mmse_only)
 
         feature_names = [c for c in processed_train.columns if c != 'target']
         for col in feature_names:
@@ -997,6 +1058,7 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
             df_raw=df_train_raw, covariates=covariates,
             mmse_needs_imputation=mmse_needs_imputation,
             progression_type=progression_type,
+            n_jobs_folds=n_jobs_folds, mmse_only=mmse_only,
         )
 
         # --- Final model trained on full processed training set, evaluated on holdout ---
@@ -1092,8 +1154,8 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
         df_train_feat['target'] = y_train_target
         df_test_feat['target'] = y_test_target
 
-        processed_train, _, _ = preprocess_data(df_train_feat, progression_type)
-        processed_test, _, _ = preprocess_data(df_test_feat, progression_type)
+        processed_train, _, _ = preprocess_data(df_train_feat, progression_type, mmse_only=mmse_only)
+        processed_test, _, _ = preprocess_data(df_test_feat, progression_type, mmse_only=mmse_only)
 
         feature_names = [c for c in processed_train.columns if c != 'target']
         for col in feature_names:
@@ -1107,7 +1169,7 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
         y_test = processed_test['target'].values
 
         # --- Step 5: Grid search (uses SMOTE inside each CV fold) ---
-        model_dict = grid_search(X_train, y_train, param_grid, csv_path, feature_names, cv_method=cv_method, use_smote=use_smote, n_jobs=n_jobs, k_neighbors=k_neighbors)
+        model_dict = grid_search(X_train, y_train, param_grid, csv_path, feature_names, cv_method=cv_method, use_smote=use_smote, n_jobs=n_jobs, k_neighbors=k_neighbors, mmse_only=mmse_only)
 
         # --- Step 6: Final model with full report ---
         model, columns, imputer, scaler, summary = build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_names, use_smote=use_smote, k_neighbors=k_neighbors)

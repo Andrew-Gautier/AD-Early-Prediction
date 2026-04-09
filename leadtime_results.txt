@@ -1,0 +1,132 @@
+
+
+
+=============================================================================================
+           Experiment Cohort  Threshold  TP  FN   TN  FP  Sensitivity  Specificity  Total Prog  Total Non-Prog  Mean Lead (mo)  Median Lead (mo)
+Exp 7 (SKF, no SMOTE) CN→MCI       0.50   7  36 1024  66        0.163        0.939          43            1090            44.6              24.0
+Exp 7 (SKF, no SMOTE) CN→MCI       0.60   2  41 1058  32        0.047        0.971          43            1090            42.0              42.0
+Exp 7 (SKF, no SMOTE) CN→MCI       0.70   1  42 1086   4        0.023        0.996          43            1090            72.0              72.0
+Exp 7 (SKF, no SMOTE) CN→MCI       0.80   0  43 1090   0        0.000        1.000          43            1090             NaN               NaN
+Exp 7 (SKF, no SMOTE) CN→MCI       0.90   0  43 1090   0        0.000        1.000          43            1090             NaN               NaN
+Exp 7 (SKF, no SMOTE) CN→MCI       0.95   0  43 1090   0        0.000        1.000          43            1090             NaN               NaN
+Exp 7 (SKF, no SMOTE) MCI→AD       0.50  52 214    8   7        0.195        0.533         266              15            17.5              12.0
+Exp 7 (SKF, no SMOTE) MCI→AD       0.60  33 233    9   6        0.124        0.600         266              15            16.0              12.0
+Exp 7 (SKF, no SMOTE) MCI→AD       0.70  20 246   11   4        0.075        0.733         266              15            16.8              12.0
+Exp 7 (SKF, no SMOTE) MCI→AD       0.80   8 258   14   1        0.030        0.933         266              15            12.0              12.0
+Exp 7 (SKF, no SMOTE) MCI→AD       0.90   1 265   15   0        0.004        1.000         266              15            12.0              12.0
+Exp 7 (SKF, no SMOTE) MCI→AD       0.95   0 266   15   0        0.000        1.000         266              15             NaN               NaN
+   Exp 8 (SKF, SMOTE) CN→MCI       0.50   3  40 1044  46        0.070        0.958          43            1090            68.0              84.0
+   Exp 8 (SKF, SMOTE) CN→MCI       0.60   3  40 1057  33        0.070        0.970          43            1090            68.0              84.0
+   Exp 8 (SKF, SMOTE) CN→MCI       0.70   3  40 1064  26        0.070        0.976          43            1090            68.0              84.0
+   Exp 8 (SKF, SMOTE) CN→MCI       0.80   2  41 1076  14        0.047        0.987          43            1090            60.0              60.0
+   Exp 8 (SKF, SMOTE) CN→MCI       0.90   1  42 1085   5        0.023        0.995          43            1090            24.0              24.0
+   Exp 8 (SKF, SMOTE) CN→MCI       0.95   0  43 1088   2        0.000        0.998          43            1090             NaN               NaN
+   Exp 8 (SKF, SMOTE) MCI→AD       0.50  59 207    3  12        0.222        0.200         266              15            17.3              12.0
+   Exp 8 (SKF, SMOTE) MCI→AD       0.60  42 224    6   9        0.158        0.400         266              15            18.0              12.0
+   Exp 8 (SKF, SMOTE) MCI→AD       0.70  33 233    8   7        0.124        0.533         266              15            15.3              12.0
+   Exp 8 (SKF, SMOTE) MCI→AD       0.80  14 252   10   5        0.053        0.667         266              15            18.0              12.0
+   Exp 8 (SKF, SMOTE) MCI→AD       0.90   4 262   15   0        0.015        1.000         266              15            12.0              12.0
+   Exp 8 (SKF, SMOTE) MCI→AD       0.95   1 265   15   0        0.004        1.000         266              15            12.0              12.0
+
+   CN features: 204, AD features: 204
+Exp 9 (SKF, SMOTE k=5) | CN→MCI | thr=0.50 | Sens=0.140, Spec=0.962, TP=6, FP=41, mean_lead=34.0mo
+Exp 9 (SKF, SMOTE k=5) | CN→MCI | thr=0.60 | Sens=0.093, Spec=0.975, TP=4, FP=27, mean_lead=45.0mo
+Exp 9 (SKF, SMOTE k=5) | CN→MCI | thr=0.70 | Sens=0.093, Spec=0.983, TP=4, FP=19, mean_lead=45.0mo
+Exp 9 (SKF, SMOTE k=5) | CN→MCI | thr=0.80 | Sens=0.070, Spec=0.991, TP=3, FP=10, mean_lead=56.0mo
+Exp 9 (SKF, SMOTE k=5) | CN→MCI | thr=0.90 | Sens=0.000, Spec=0.996, TP=0, FP=4, mean_lead=N/Amo
+Exp 9 (SKF, SMOTE k=5) | CN→MCI | thr=0.95 | Sens=0.000, Spec=0.999, TP=0, FP=1, mean_lead=N/Amo
+Exp 9 (SKF, SMOTE k=5) | MCI→AD | thr=0.50 | Sens=0.233, Spec=0.200, TP=62, FP=12, mean_lead=17.6mo
+Exp 9 (SKF, SMOTE k=5) | MCI→AD | thr=0.60 | Sens=0.154, Spec=0.333, TP=41, FP=10, mean_lead=17.9mo
+Exp 9 (SKF, SMOTE k=5) | MCI→AD | thr=0.70 | Sens=0.124, Spec=0.400, TP=33, FP=9, mean_lead=15.6mo
+Exp 9 (SKF, SMOTE k=5) | MCI→AD | thr=0.80 | Sens=0.053, Spec=0.533, TP=14, FP=7, mean_lead=18.0mo
+Exp 9 (SKF, SMOTE k=5) | MCI→AD | thr=0.90 | Sens=0.015, Spec=1.000, TP=4, FP=0, mean_lead=12.0mo
+Exp 9 (SKF, SMOTE k=5) | MCI→AD | thr=0.95 | Sens=0.004, Spec=1.000, TP=1, FP=0, mean_lead=12.0mo
+Exp 10 (SKF, SMOTE k=7) | CN→MCI | thr=0.50 | Sens=0.070, Spec=0.968, TP=3, FP=35, mean_lead=36.0mo
+Exp 10 (SKF, SMOTE k=7) | CN→MCI | thr=0.60 | Sens=0.070, Spec=0.975, TP=3, FP=27, mean_lead=36.0mo
+Exp 10 (SKF, SMOTE k=7) | CN→MCI | thr=0.70 | Sens=0.047, Spec=0.980, TP=2, FP=22, mean_lead=18.0mo
+Exp 10 (SKF, SMOTE k=7) | CN→MCI | thr=0.80 | Sens=0.047, Spec=0.989, TP=2, FP=12, mean_lead=18.0mo
+Exp 10 (SKF, SMOTE k=7) | CN→MCI | thr=0.90 | Sens=0.000, Spec=0.994, TP=0, FP=6, mean_lead=N/Amo
+Exp 10 (SKF, SMOTE k=7) | CN→MCI | thr=0.95 | Sens=0.000, Spec=0.998, TP=0, FP=2, mean_lead=N/Amo
+Exp 10 (SKF, SMOTE k=7) | MCI→AD | thr=0.50 | Sens=0.244, Spec=0.200, TP=65, FP=12, mean_lead=17.5mo
+Exp 10 (SKF, SMOTE k=7) | MCI→AD | thr=0.60 | Sens=0.173, Spec=0.333, TP=46, FP=10, mean_lead=17.0mo
+Exp 10 (SKF, SMOTE k=7) | MCI→AD | thr=0.70 | Sens=0.128, Spec=0.467, TP=34, FP=8, mean_lead=16.2mo
+Exp 10 (SKF, SMOTE k=7) | MCI→AD | thr=0.80 | Sens=0.071, Spec=0.600, TP=19, FP=6, mean_lead=17.1mo
+Exp 10 (SKF, SMOTE k=7) | MCI→AD | thr=0.90 | Sens=0.019, Spec=1.000, TP=5, FP=0, mean_lead=12.0mo
+Exp 10 (SKF, SMOTE k=7) | MCI→AD | thr=0.95 | Sens=0.004, Spec=1.000, TP=1, FP=0, mean_lead=12.0mo
+Exp 11 (SKF, SMOTE k=10) | CN→MCI | thr=0.50 | Sens=0.140, Spec=0.940, TP=6, FP=65, mean_lead=48.0mo
+Exp 11 (SKF, SMOTE k=10) | CN→MCI | thr=0.60 | Sens=0.000, Spec=1.000, TP=0, FP=0, mean_lead=N/Amo
+Exp 11 (SKF, SMOTE k=10) | CN→MCI | thr=0.70 | Sens=0.000, Spec=1.000, TP=0, FP=0, mean_lead=N/Amo
+Exp 11 (SKF, SMOTE k=10) | CN→MCI | thr=0.80 | Sens=0.000, Spec=1.000, TP=0, FP=0, mean_lead=N/Amo
+Exp 11 (SKF, SMOTE k=10) | CN→MCI | thr=0.90 | Sens=0.000, Spec=1.000, TP=0, FP=0, mean_lead=N/Amo
+Exp 11 (SKF, SMOTE k=10) | CN→MCI | thr=0.95 | Sens=0.000, Spec=1.000, TP=0, FP=0, mean_lead=N/Amo
+Exp 11 (SKF, SMOTE k=10) | MCI→AD | thr=0.50 | Sens=0.237, Spec=0.200, TP=63, FP=12, mean_lead=18.1mo
+Exp 11 (SKF, SMOTE k=10) | MCI→AD | thr=0.60 | Sens=0.158, Spec=0.400, TP=42, FP=9, mean_lead=18.6mo
+Exp 11 (SKF, SMOTE k=10) | MCI→AD | thr=0.70 | Sens=0.109, Spec=0.400, TP=29, FP=9, mean_lead=16.6mo
+Exp 11 (SKF, SMOTE k=10) | MCI→AD | thr=0.80 | Sens=0.064, Spec=0.667, TP=17, FP=5, mean_lead=17.6mo
+Exp 11 (SKF, SMOTE k=10) | MCI→AD | thr=0.90 | Sens=0.011, Spec=0.800, TP=3, FP=3, mean_lead=12.0mo
+Exp 11 (SKF, SMOTE k=10) | MCI→AD | thr=0.95 | Sens=0.004, Spec=1.000, TP=1, FP=0, mean_lead=12.0mo
+
+====================================================================================================
+              Experiment Cohort  Threshold  TP  FN   TN  FP  Sensitivity  Specificity  Total Prog  Total Non-Prog  Mean Lead (mo)  Median Lead (mo)
+  Exp 9 (SKF, SMOTE k=5) CN→MCI       0.50   6  37 1049  41        0.140        0.962          43            1090            34.0              18.0
+  Exp 9 (SKF, SMOTE k=5) CN→MCI       0.60   4  39 1063  27        0.093        0.975          43            1090            45.0              36.0
+  Exp 9 (SKF, SMOTE k=5) CN→MCI       0.70   4  39 1071  19        0.093        0.983          43            1090            45.0              36.0
+  Exp 9 (SKF, SMOTE k=5) CN→MCI       0.80   3  40 1080  10        0.070        0.991          43            1090            56.0              48.0
+  Exp 9 (SKF, SMOTE k=5) CN→MCI       0.90   0  43 1086   4        0.000        0.996          43            1090             NaN               NaN
+  Exp 9 (SKF, SMOTE k=5) CN→MCI       0.95   0  43 1089   1        0.000        0.999          43            1090             NaN               NaN
+  Exp 9 (SKF, SMOTE k=5) MCI→AD       0.50  62 204    3  12        0.233        0.200         266              15            17.6              12.0
+  Exp 9 (SKF, SMOTE k=5) MCI→AD       0.60  41 225    5  10        0.154        0.333         266              15            17.9              12.0
+  Exp 9 (SKF, SMOTE k=5) MCI→AD       0.70  33 233    6   9        0.124        0.400         266              15            15.6              12.0
+  Exp 9 (SKF, SMOTE k=5) MCI→AD       0.80  14 252    8   7        0.053        0.533         266              15            18.0              12.0
+  Exp 9 (SKF, SMOTE k=5) MCI→AD       0.90   4 262   15   0        0.015        1.000         266              15            12.0              12.0
+  Exp 9 (SKF, SMOTE k=5) MCI→AD       0.95   1 265   15   0        0.004        1.000         266              15            12.0              12.0
+ Exp 10 (SKF, SMOTE k=7) CN→MCI       0.50   3  40 1055  35        0.070        0.968          43            1090            36.0              24.0
+ Exp 10 (SKF, SMOTE k=7) CN→MCI       0.60   3  40 1063  27        0.070        0.975          43            1090            36.0              24.0
+ Exp 10 (SKF, SMOTE k=7) CN→MCI       0.70   2  41 1068  22        0.047        0.980          43            1090            18.0              18.0
+ Exp 10 (SKF, SMOTE k=7) CN→MCI       0.80   2  41 1078  12        0.047        0.989          43            1090            18.0              18.0
+ Exp 10 (SKF, SMOTE k=7) CN→MCI       0.90   0  43 1084   6        0.000        0.994          43            1090             NaN               NaN
+ Exp 10 (SKF, SMOTE k=7) CN→MCI       0.95   0  43 1088   2        0.000        0.998          43            1090             NaN               NaN
+ Exp 10 (SKF, SMOTE k=7) MCI→AD       0.50  65 201    3  12        0.244        0.200         266              15            17.5              12.0
+ Exp 10 (SKF, SMOTE k=7) MCI→AD       0.60  46 220    5  10        0.173        0.333         266              15            17.0              12.0
+ Exp 10 (SKF, SMOTE k=7) MCI→AD       0.70  34 232    7   8        0.128        0.467         266              15            16.2              12.0
+ Exp 10 (SKF, SMOTE k=7) MCI→AD       0.80  19 247    9   6        0.071        0.600         266              15            17.1              12.0
+ Exp 10 (SKF, SMOTE k=7) MCI→AD       0.90   5 261   15   0        0.019        1.000         266              15            12.0              12.0
+ Exp 10 (SKF, SMOTE k=7) MCI→AD       0.95   1 265   15   0        0.004        1.000         266              15            12.0              12.0
+Exp 11 (SKF, SMOTE k=10) CN→MCI       0.50   6  37 1025  65        0.140        0.940          43            1090            48.0              48.0
+Exp 11 (SKF, SMOTE k=10) CN→MCI       0.60   0  43 1090   0        0.000        1.000          43            1090             NaN               NaN
+Exp 11 (SKF, SMOTE k=10) CN→MCI       0.70   0  43 1090   0        0.000        1.000          43            1090             NaN               NaN
+Exp 11 (SKF, SMOTE k=10) CN→MCI       0.80   0  43 1090   0        0.000        1.000          43            1090             NaN               NaN
+Exp 11 (SKF, SMOTE k=10) CN→MCI       0.90   0  43 1090   0        0.000        1.000          43            1090             NaN               NaN
+Exp 11 (SKF, SMOTE k=10) CN→MCI       0.95   0  43 1090   0        0.000        1.000          43            1090             NaN               NaN
+Exp 11 (SKF, SMOTE k=10) MCI→AD       0.50  63 203    3  12        0.237        0.200         266              15            18.1              12.0
+Exp 11 (SKF, SMOTE k=10) MCI→AD       0.60  42 224    6   9        0.158        0.400         266              15            18.6              12.0
+Exp 11 (SKF, SMOTE k=10) MCI→AD       0.70  29 237    6   9        0.109        0.400         266              15            16.6              12.0
+Exp 11 (SKF, SMOTE k=10) MCI→AD       0.80  17 249   10   5        0.064        0.667         266              15            17.6              12.0
+Exp 11 (SKF, SMOTE k=10) MCI→AD       0.90   3 263   12   3        0.011        0.800         266              15            12.0              12.0
+Exp 11 (SKF, SMOTE k=10) MCI→AD       0.95   1 265   15   0        0.004        1.000         266              15            12.0              12.0
+
+
+Full-feature: CN=204, AD=204
+MMSE-only:    CN=11, AD=11
+
+==========================================================================================
+  Lead-Time Comparison — CN→MCI
+==========================================================================================
+ Threshold  Full TP  Full FP  Full TN  Full FN  Full Sens  Full Spec  Full Mean (mo)  Full Med (mo)  MMSE TP  MMSE FP  MMSE TN  MMSE FN  MMSE Sens  MMSE Spec  MMSE Mean (mo)  MMSE Med (mo)
+      0.50        7       66     1024       36      0.163      0.939            58.3           31.4       27      616      474       16      0.628      0.435            70.4           62.8
+      0.60        2       32     1058       41      0.047      0.971            55.0           55.0        9      230      860       34      0.209      0.789            66.3           62.8
+      0.70        1        4     1086       42      0.023      0.996            94.2           94.2        0       32     1058       43      0.000      0.971             NaN            NaN
+      0.80        0        0     1090       43      0.000      1.000             NaN            NaN        0        0     1090       43      0.000      1.000             NaN            NaN
+      0.90        0        0     1090       43      0.000      1.000             NaN            NaN        0        0     1090       43      0.000      1.000             NaN            NaN
+      0.95        0        0     1090       43      0.000      1.000             NaN            NaN        0        0     1090       43      0.000      1.000             NaN            NaN
+
+==========================================================================================
+  Lead-Time Comparison — MCI→AD
+==========================================================================================
+ Threshold  Full TP  Full FP  Full TN  Full FN  Full Sens  Full Spec  Full Mean (mo)  Full Med (mo)  MMSE TP  MMSE FP  MMSE TN  MMSE FN  MMSE Sens  MMSE Spec  MMSE Mean (mo)  MMSE Med (mo)
+      0.50       52        7        8      214      0.195      0.533            22.9           15.7       37       12        3      229      0.139        0.2            25.5           15.7
+      0.60       33        6        9      233      0.124      0.600            20.9           15.7        2        6        9      264      0.008        0.6            23.5           23.5
+      0.70       20        4       11      246      0.075      0.733            22.0           15.7        0        0       15      266      0.000        1.0             NaN            NaN
+      0.80        8        1       14      258      0.030      0.933            15.7           15.7        0        0       15      266      0.000        1.0             NaN            NaN
+      0.90        1        0       15      265      0.004      1.000            15.7           15.7        0        0       15      266      0.000        1.0             NaN            NaN
+      0.95        0        0       15      266      0.000      1.000             NaN            NaN        0        0       15      266      0.000        1.0             NaN            Na
