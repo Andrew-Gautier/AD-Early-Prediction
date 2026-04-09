@@ -1,0 +1,32 @@
+Dataset base: pooled_MCI_AD
+Progression type: AD
+CV method: loocv (Mode A — no train/test split)
+Class balancing: disabled
+MMSE imputation: per-fold (fit on N-1)
+Total samples: 1070
+
+Best hyperparameters:
+  n_estimators: 500
+  max_depth: 4
+  learning_rate: 0.01
+  subsample: 1.0
+  colsample_bytree: 0.8
+
+Classification Report:
+              precision    recall  f1-score   support
+
+           0       0.60      0.79      0.69       347
+           1       0.88      0.75      0.81       723
+
+    accuracy                           0.76      1070
+   macro avg       0.74      0.77      0.75      1070
+weighted avg       0.79      0.76      0.77      1070
+
+
+Base ROC AUC: 0.8526
+Bootstrap 95% CI (n=1000, valid_samples=1000/1000):
+- Accuracy: 0.764 (CI: 0.740, 0.790) range=0.050
+- Precision (macro): 0.744 (CI: 0.719, 0.769) range=0.050
+- Recall (macro): 0.772 (CI: 0.747, 0.797) range=0.050
+- F1 (macro): 0.749 (CI: 0.722, 0.775) range=0.053
+- ROC AUC: 0.853 (CI: 0.831, 0.875) range=0.044

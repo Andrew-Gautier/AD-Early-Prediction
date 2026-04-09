@@ -511,6 +511,11 @@ def build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_name
         "classification_report": cr_str,
         "base_auc": float(base_auc),
         "bootstrap_metrics": metrics,
+        "y_true": y_test,
+        "y_proba": y_proba,
+        "y_pred": y_pred,
+        "feature_names": list(feature_names),
+        "feature_importances": model.feature_importances_,
     }
     return model, feature_names, imputer, scaler, summary
 
