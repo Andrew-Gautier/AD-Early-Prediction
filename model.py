@@ -1255,7 +1255,8 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
 #  VISUALIZATION  
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def plot_feature_importance(importances, feature_names, top_n=20, title=None, save_path=None):
+def plot_feature_importance(importances, feature_names, top_n=20, title=None, save_path=None,
+                            title_fontsize=14, label_fontsize=12, tick_fontsize=10, value_fontsize=8):
     """Publication-quality horizontal bar chart of top-N feature importances.
 
     Parameters
@@ -1271,6 +1272,14 @@ def plot_feature_importance(importances, feature_names, top_n=20, title=None, sa
         Custom plot title.
     save_path : str, optional
         If provided, save the figure to this path.
+    title_fontsize : int
+        Font size for the chart title.
+    label_fontsize : int
+        Font size for axis labels.
+    tick_fontsize : int
+        Font size for tick labels (feature names).
+    value_fontsize : int
+        Font size for the value annotations on each bar.
     """
     if hasattr(importances, 'feature_importances_'):
         importances = importances.feature_importances_
@@ -1281,9 +1290,10 @@ def plot_feature_importance(importances, feature_names, top_n=20, title=None, sa
     colors = plt.cm.viridis(np.linspace(0.25, 0.85, len(fi)))
     ax.barh(fi['Feature'], fi['Importance'], color=colors, edgecolor='white', linewidth=0.5)
     for i, (val, name) in enumerate(zip(fi['Importance'], fi['Feature'])):
-        ax.text(val + fi['Importance'].max() * 0.01, i, f'{val:.4f}', va='center', fontsize=8)
-    ax.set_xlabel('Importance (gain)', fontsize=12)
-    ax.set_title(title or f'Top {top_n} Feature Importances', fontsize=14, fontweight='bold')
+        ax.text(val + fi['Importance'].max() * 0.01, i, f'{val:.4f}', va='center', fontsize=value_fontsize)
+    ax.set_xlabel('Importance (gain)', fontsize=label_fontsize)
+    ax.set_title(title or f'Top {top_n} Feature Importances', fontsize=title_fontsize, fontweight='bold')
+    ax.tick_params(axis='both', labelsize=tick_fontsize)
     ax.spines[['top', 'right']].set_visible(False)
     ax.grid(axis='x', alpha=0.3, linestyle='--')
     plt.tight_layout()
