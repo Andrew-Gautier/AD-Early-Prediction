@@ -148,53 +148,7 @@ def summarise_sequences(
 
     return summary
 
-def combine_ids_to_one_row(folder_path):
-    for filename in os.listdir(folder_path):
-        if filename.endswith(".csv"):
-            file_path = os.path.join(folder_path, filename)
-            df = pd.read_csv(file_path, header=0)
-            
-            # Combine all IDs into a single row
-            all_ids = []
-            for ids in df['NACCID']:
-                ids_list = eval(ids) if isinstance(ids, str) else ids
-                all_ids.extend(ids_list)
-            
-            # Create a new DataFrame with a single row of combined IDs
-            combined_df = pd.DataFrame({'NACCID': [str(all_ids)]})
-            
-            # Save the updated DataFrame back to the CSV file
-            combined_df.to_csv(file_path, index=False)
-            
-def clean_and_parse_csv(file_path):
-    ids = []
-    vectors = []
-    with open(file_path, 'r') as file:
-        next(file)  # Skip the header
-        for line in file:
-            if line.startswith('"['):
-                # Extract and clean the NACCIDs
-                id_str = line.split('","')[0].strip().strip('"').strip('[]').replace("'", "")
-                id_list = id_str.split(", ")
-                ids.extend(id_list)
-                
-                # Extract and clean the ProgressionVector
-                vector_str = line.split('","')[1].strip().strip('"').strip('[]')
-                vector = ast.literal_eval(vector_str)
-                vectors.extend([vector] * len(id_list))
-    
-    # Create a DataFrame with cleaned data
-    df = pd.DataFrame({'NACCID': ids, 'ProgressionVector': vectors})
-    return df
 
-def clean_all_csv_files_in_directory(directory):
-    for filename in os.listdir(directory):
-        if filename.endswith('.csv'):
-            file_path = os.path.join(directory, filename)
-            df_cleaned = clean_and_parse_csv(file_path)
-            cleaned_file_path = os.path.join(directory, f"cleaned_{filename}")
-            df_cleaned.to_csv(cleaned_file_path, index=False)
-            print(f"Cleaned file saved to: {cleaned_file_path}")
             
 def convert_to_real_nan(row):
     try:
@@ -232,7 +186,7 @@ def _build_mmse_matrix(df, covariates):
     Handles variable-length list columns by padding to the longest
     sequence with NaN.  Returns (mmse_matrix, combined_data, n_mmse_cols, orig_lengths).
     """
-    mmse_lists = df['MMSE'].apply(convert_to_real_nan)
+    mmse_lists = df['NACCMMSE'].apply(convert_to_real_nan)
     mmse_matrix, orig_lengths = _pad_to_max(mmse_lists)
     covariate_matrix = []
     for col in covariates:
@@ -270,7 +224,7 @@ def fit_mmse_imputer(df, covariates):
     imputed_data = imputer.fit_transform(combined_data)
     imputed_mmse = imputed_data[:, :n_mmse_cols]
     df = df.copy()
-    df['MMSE'] = _process_mmse_values(imputed_mmse, orig_lengths)
+    df['NACCMMSE'] = _process_mmse_values(imputed_mmse, orig_lengths)
     return imputer, df
 
 def transform_mmse(df, covariates, fitted_imputer):
@@ -289,7 +243,7 @@ def transform_mmse(df, covariates, fitted_imputer):
     imputed_data = fitted_imputer.transform(combined_data)
     imputed_mmse = imputed_data[:, :n_mmse_cols]
     df = df.copy()
-    df['MMSE'] = _process_mmse_values(imputed_mmse, orig_lengths)
+    df['NACCMMSE'] = _process_mmse_values(imputed_mmse, orig_lengths)
     return df
 
 # Manually impute a single vector of categorical longitudinal variables
@@ -340,77 +294,6 @@ def impute_gds(list):
                 list[i]=avg
     return list
 
-# Slice eligible samples from greater-visits dataset to select number of continuous time points
-# target_class: 0 for non-progressor in MCI/AD, 
-#               1 for progressor in CN/MCI
-def time_series_slicer(target_class, original_data, target_point_count):
-
-    # filter out ineligible samples
-    if target_class:
-        eligible_ind = []
-        for i, (ind ,r) in enumerate(original_data.iterrows()):
-            # keep progressors with label 0 and 1
-            progression = r['Progression']
-            if isinstance(progression, str):
-                # Convert the string representation of the list to an actual list
-                progression = eval(progression)
-            if (0 in progression) and (1 in progression): eligible_ind.append(i)
-        sliced_data = original_data.iloc[eligible_ind]
-    else:
-        eligible_ind = []
-        for i,(ind,r) in enumerate(original_data.iterrows()):
-            # keep non-progressor with only label 1
-            progression = r['Progression']
-            if isinstance(progression, str):
-                # Convert the string representation of the list to an actual list
-                progression = eval(progression)
-            if (not 0 in progression) and (not 2 in progression): eligible_ind.append(i)
-        sliced_data = original_data.iloc[eligible_ind]
-    
-    # grand dataset needed for age adjustment
-    current_dir = os.path.dirname(os.path.abspath(__file__)) 
-    ### NOTE: MAGIC FILE PATH BELOW, CHANGE IF NECESSARY
-    target_file = os.path.join(current_dir, 'investigator_ftldlbd_nacc72.csv')
-    df = pd.read_csv(target_file, header=0)
-
-    for ind, (i, row) in enumerate(sliced_data.iterrows()):
-        if isinstance(row['Progression'], str):
-            # Convert the string representation of the list to an actual list
-            row['Progression'] = eval(row['Progression'])
-        old_tp=0
-        new_tp=0
-        x = row['Progression']
-        if target_class:
-            # for progressors in CN/MCI
-            if any(1==x[a] for a in range(target_point_count)):
-                # if in first n visits, use the first n time points
-                old_tp=0
-                new_tp=target_point_count-1
-            else:
-                # elsewise, use the first progressed visit and n-1 visits ahead of it
-                for a in range(target_point_count, len(x)):
-                    if x[a]==1:
-                        new_tp=a
-                        old_tp= a - target_point_count +1
-                        break
-        else:
-            # for non-progressors in MCI/AD, use the most distant n visits
-            old_tp = 0
-            new_tp = target_point_count-1
-
-        
-        # slice time points for all longitudinal variables
-        tags = ['Progression', 'BMI', 'MMSE', 'GDS', 'CDR', "TOBAC30", "BILLS", 'TAXES', 'SHOPPING', 'GAMES', 'STOVE', 'MEALPREP', 'EVENTS', 'PAYATTN', 'REMDATES', 'TRAVEL','hearing','vision']
-        for v in tags:
-            if isinstance(row[v], str):
-                row[v]=eval(row[v].replace("nan", "np.nan"))
-            row[v]=row[v][old_tp:new_tp+1]
-        
-        # age adjustment using NACCAGE
-        row['age']=df[df['NACCID']==row['ID']].sort_values(by="NACCAGE", ascending=True).iloc[old_tp]['NACCAGE']
-
-        sliced_data.iloc[ind] = row
-    return sliced_data
 
 # create new categorical longitudinal variables "hearing" and "vision"
 #      using HEARING HEARAID HEARWAID, VISION VISCORR VISWCORR.
@@ -506,6 +389,170 @@ def create_hv(df):
 
 # ── Sentinel-value cleaning helpers ────────────────────────────────────────────
 
+
+# ── Subject-level aggregation ──────────────────────────────────────────────────
+
+# Longitudinal columns stored as per-visit lists
+_LONG_COLS = [
+    'NACCBMI', 'NACCMMSE', 'NACCGDS', 'CDRSUM', 'TOBAC30',
+    'BILLS', 'TAXES', 'SHOPPING', 'GAMES', 'STOVE',
+    'MEALPREP', 'EVENTS', 'PAYATTN', 'REMDATES', 'TRAVEL',
+    'HEARING', 'HEARAID', 'HEARWAID', 'VISION', 'VISCORR', 'VISWCORR',
+    'NACCLIVS', 'COMMUN',
+]
+
+# Scalar columns — take the most-recent visit value
+_SCALAR_COLS = [
+    'SEX', 'EDUC', 'ALCOHOL', 'NACCFAM',
+    'CVHATT', 'CVAFIB', 'DIABETES', 'HYPERCHO', 'HYPERTEN',
+    'B12DEF', 'DEPD', 'ANX', 'NACCTBI', 'SMOKYRS', 'RACE', 'HISPANIC',
+]
+
+# Numeric coding for label_visit string output → integer used in Progression
+_LABEL_INT = {'CN': 0, 'MCI': 1, 'AD': 2, 'Unknown': 3}
+
+
+def build_subject_df(
+    source_csv: str,
+    min_visits: int = 2,
+    max_visits: int = None,
+    coding_key: str = 'standard',
+) -> pd.DataFrame:
+    """
+    Read *source_csv* (the raw NACC investigator file) and aggregate to one
+    row per subject, matching the schema of the existing pooled CSVs plus
+    the new columns months_since_baseline, NACCLIVS, and COMMUN.
+
+    Parameters
+    ----------
+    source_csv  : path to investigator_ftldlbd_nacc72.csv (or equivalent)
+    min_visits  : keep subjects with at least this many visits
+    max_visits  : keep subjects with at most this many visits (None = no cap)
+    coding_key  : which CODINGS scheme to use for Progression labels
+
+    Returns
+    -------
+    pd.DataFrame  — one row per subject, columns:
+        ID, Prog_ID, Progression, n_visits,
+        age, SEX, EDUC, ALCOHOL, NACCFAM, <comorbidities>, SMOKYRS, RACE, HISPANIC,
+        NACCBMI, NACCMMSE, NACCGDS, CDRSUM, TOBAC30, <FAQ cols>,
+        HEARING, HEARAID, HEARWAID, VISION, VISCORR, VISWCORR,
+        NACCLIVS, COMMUN, months_since_baseline
+    """
+    raw = pd.read_csv(source_csv)
+
+    # Sort visits chronologically within each subject
+    raw = raw.sort_values(['NACCID', 'NACCVNUM'])
+
+    rules = CODINGS[coding_key]['rules']
+    long_present = [c for c in _LONG_COLS if c in raw.columns]
+    scalar_present = [c for c in _SCALAR_COLS if c in raw.columns]
+
+    rows = []
+    for naccid, grp in raw.groupby('NACCID', sort=False):
+        grp = grp.reset_index(drop=True)
+        n = len(grp)
+
+        if min_visits is not None and n < min_visits:
+            continue
+        if max_visits is not None and n > max_visits:
+            continue
+
+        # Progression tuple (integer-coded)
+        prog_labels = [_LABEL_INT.get(label_visit(r, rules), 3) for _, r in grp.iterrows()]
+        progression = tuple(prog_labels)
+
+        # Prog_ID: 1 if any visit is more advanced than the starting label
+        start = prog_labels[0]
+        prog_id = 1 if any(v > start for v in prog_labels) else 0
+
+        # age at baseline (NACCAGEB is defined as age at initial visit)
+        age = grp['NACCAGEB'].iloc[0] if 'NACCAGEB' in grp.columns else np.nan
+
+        # months_since_baseline from NACCFDYS
+        if 'NACCFDYS' in grp.columns:
+            months_since_baseline = [round(float(d) / 30.44, 2) for d in grp['NACCFDYS']]
+        else:
+            months_since_baseline = [np.nan] * n
+
+        # Longitudinal columns — list of per-visit values
+        long_vals = {col: grp[col].tolist() for col in long_present}
+
+        # Scalar columns — most recent non-null value
+        scalar_vals = {}
+        for col in scalar_present:
+            series = grp[col].dropna()
+            scalar_vals[col] = series.iloc[-1] if len(series) > 0 else np.nan
+
+        row = {
+            'ID': naccid,
+            'Prog_ID': prog_id,
+            'Progression': progression,
+            'n_visits': n,
+            'age': age,
+            **scalar_vals,
+            **long_vals,
+            'months_since_baseline': months_since_baseline,
+        }
+        rows.append(row)
+
+    return pd.DataFrame(rows).reset_index(drop=True)
+
+
+# ── Dataset summary / query helper ────────────────────────────────────────────
+
+def summarize_dataset(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Return a table of patient counts broken down by n_visits and class.
+
+    Classes:
+        CN_nonprog  — Progression contains 0, Prog_ID == 0
+        CN_prog     — Progression contains 0, Prog_ID == 1
+        MCI_nonprog — Progression does not contain 0, Prog_ID == 0
+        MCI_prog    — Progression does not contain 0, Prog_ID == 1
+
+    Parameters
+    ----------
+    df : DataFrame produced by build_subject_df() or one of the pooled CSVs.
+         Must have columns: Progression, Prog_ID, n_visits (or visit count
+         derivable from Progression length).
+
+    Returns
+    -------
+    pd.DataFrame with columns:
+        n_visits, CN_nonprog, CN_prog, MCI_nonprog, MCI_prog, Total
+    """
+    work = df.copy()
+
+    # Parse Progression if stored as string
+    work['Progression'] = work['Progression'].apply(
+        lambda p: eval(p) if isinstance(p, str) else p
+    )
+
+    # Derive n_visits from Progression length if column absent
+    if 'n_visits' not in work.columns:
+        work['n_visits'] = work['Progression'].apply(len)
+
+    def _classify(row):
+        prog = row['Progression']
+        pid = row['Prog_ID']
+        cn_starting = prog[0] == 0
+        if cn_starting:
+            return 'CN_nonprog' if pid == 0 else 'CN_prog'
+        else:
+            return 'MCI_nonprog' if pid == 0 else 'MCI_prog'
+
+    work['_class'] = work.apply(_classify, axis=1)
+
+    summary = (
+        work.groupby(['n_visits', '_class'])
+        .size()
+        .unstack(fill_value=0)
+        .reindex(columns=['CN_nonprog', 'CN_prog', 'MCI_nonprog', 'MCI_prog'], fill_value=0)
+    )
+    summary['Total'] = summary.sum(axis=1)
+    return summary.reset_index().sort_values('n_visits').reset_index(drop=True)
+
 def _parse_list_col(row):
     """Parse a string-encoded list into a real Python list, converting 'nan' → np.nan."""
     if not isinstance(row, str):
@@ -556,12 +603,11 @@ def _get_progression(row):
     return prog
 
 def _cn_starting_indices(df):
-    """Return iloc indices of rows where label 0 (CN) appears in Progression.
-    This captures all CN-starting patients: stable CN, CN→MCI, CN→AD, CN→MCI→AD."""
+    """Return iloc indices of rows whose first visit label is CN (0)."""
     idx = []
     for i, (_, r) in enumerate(df.iterrows()):
         prog = _get_progression(r)
-        if 0 in prog:
+        if prog[0] == 0:
             idx.append(i)
     return idx
 
@@ -582,61 +628,15 @@ def _detect_reverters(df, task):
     return idx
 
 
-# ── Lead-time slicing helpers ──────────────────────────────────────────────────
-
-_LT_TAGS = ['Progression', 'BMI', 'MMSE', 'GDS', 'CDR', 'TOBAC30', 'BILLS',
-            'TAXES', 'SHOPPING', 'GAMES', 'STOVE', 'MEALPREP', 'EVENTS',
-            'PAYATTN', 'REMDATES', 'TRAVEL', 'hearing', 'vision']
-
-
-def _slice_first_n(df, n):
-    """Slice all longitudinal columns in *df* to the first *n* time points (in-place)."""
-    for ind, (i, row) in enumerate(df.iterrows()):
-        for v in _LT_TAGS:
-            val = row[v]
-            if isinstance(val, str):
-                val = eval(val.replace("nan", "np.nan"))
-            row[v] = val[:n]
-        df.iloc[ind] = row
-
-
-def _slice_progressor(df, n, target_label=2):
-    """Slice progressors to *n* visits around the first occurrence of *target_label* (in-place).
-
-    If the target label appears within the first *n* visits, use visits 0..n-1.
-    Otherwise, end at the first target visit and go back n-1 visits.
-    Mirrors the logic in ``time_series_slicer`` for target_class=1.
-    """
-    for ind, (i, row) in enumerate(df.iterrows()):
-        prog = row['Progression']
-        if isinstance(prog, str):
-            prog = eval(prog)
-        # find window
-        if any(prog[a] == target_label for a in range(min(n, len(prog)))):
-            old_tp, new_tp = 0, n - 1
-        else:
-            old_tp, new_tp = 0, n - 1  # fallback
-            for a in range(n, len(prog)):
-                if prog[a] == target_label:
-                    new_tp = a
-                    old_tp = a - n + 1
-                    break
-        for v in _LT_TAGS:
-            val = row[v]
-            if isinstance(val, str):
-                val = eval(val.replace("nan", "np.nan"))
-            row[v] = val[old_tp:new_tp + 1]
-        df.iloc[ind] = row
-
-
 # ── Main pipeline ──────────────────────────────────────────────────────────────
 
 def run_pipeline(
-    source_dir: str = "Raw_Cohorts",
+    source_csv: str,
     dest_dir: str = "Dataset_output",
     min_visits: int = 2,
-    max_visits: int = 10,
+    max_visits: int = None,
     min_age: int = 50,
+    lead_time_pct: float = 0.05,
     do_impute: bool = False,
     verbose: bool = True,
 ):
@@ -645,135 +645,188 @@ def run_pipeline(
 
     Parameters
     ----------
-    source_dir : path to folder with ``{N}visit_combined.csv`` files.
-    dest_dir   : output folder (created if needed).
-    min_visits / max_visits : range of visit-count files to process (inclusive).
-    min_age    : drop subjects younger than this at baseline.
-    do_impute  : if True, apply GDS/categorical/BMI imputation; else leave NaN.
-    verbose    : print progress.
+    source_csv      : path to the raw NACC investigator CSV
+                      (e.g. 'investigator_ftldlbd_nacc72.csv').
+    dest_dir        : output folder (created if needed).
+    min_visits      : minimum visit count to include.
+    max_visits      : maximum visit count to include (None = no cap).
+    min_age         : drop subjects younger than this at baseline.
+    lead_time_pct   : fraction of each (visit_count × class) cell to reserve
+                      for the lead-time holdout set (default 5%).
+    do_impute       : if True, apply GDS/categorical/BMI imputation.
+    verbose         : print progress.
 
     Outputs (written to *dest_dir*)
     -------
-    ``pooled_CN.csv``          — 2–5 visit CN-starting patients (Prog_ID distinguishes prog/non-prog).
-    ``pooled_MCI_AD.csv``      — 2–5 visit MCI-starting patients.
-    ``lead_time_CN.csv``       — 6–10 visit CN-starting patients (full sequences).
-    ``lead_time_MCI_AD.csv``   — 6–10 visit MCI-starting patients (full sequences).
-    ``reverters_CN.csv``, ``reverters_MCI_AD.csv`` (all reverters pooled).
-
-    CN model inclusion
-    ------------------
-    CN-starting patients include anyone whose Progression contains label 0.
-    Progressors (Prog_ID=1) are those who reach MCI (1) or AD (2) at any visit.
-    Reverters (Prog_ID=1 but ending at 0) are excluded.
-
-    MCI→AD model is unchanged: starts MCI (no 0 in Progression), progressors reach AD (2).
+    pooled_CN.csv          — CN-starting patients (Prog_ID 0/1).
+    pooled_MCI_AD.csv      — MCI-starting patients.
+    lead_time_CN.csv       — 5% lead-time holdout, CN-starting.
+    lead_time_MCI_AD.csv   — 5% lead-time holdout, MCI-starting.
+    reverters_CN.csv, reverters_MCI_AD.csv
     """
+    import math
+
     os.makedirs(dest_dir, exist_ok=True)
     stats = {"bmi_dropped": {}, "mmse_dropped": {}, "age_dropped": {}}
     reverters_cn = []
     reverters_mci_ad = []
-    pool_cn = []       # accumulates CN-starting DataFrames from 2–5 visit files
-    pool_mci_ad = []   # accumulates MCI-starting DataFrames from 2–5 visit files
-    lead_cn = []       # accumulates CN-starting DataFrames from 6–10 visit files (full sequences)
-    lead_mci_ad = []   # accumulates MCI-starting DataFrames from 6–10 visit files (full sequences)
+    pool_cn = []
+    pool_mci_ad = []
+    lead_cn = []
+    lead_mci_ad = []
 
-    # --- MMSE tolerance map: visit_count → max allowed NaN -----------------
-    mmse_tol = {2: 0, 3: 0, 4: 1, 5: 1, 6: 2, 7: 2, 8: 3, 9: 3, 10: 4}
+    # MMSE tolerance: max allowed NaN per visit count
+    # For visit counts beyond 10, extend at +1 per 2 extra visits
+    def _mmse_tol(n):
+        base = {2: 0, 3: 0, 4: 1, 5: 1, 6: 2, 7: 2, 8: 3, 9: 3, 10: 4}
+        if n in base:
+            return base[n]
+        return 4 + (n - 10 + 1) // 2
 
-    # Longitudinal columns that get FAQ-style cleaning (-4, 9, 8 → NaN)
     FAQ_COLS = ['BILLS', 'TAXES', 'SHOPPING', 'GAMES', 'STOVE',
                 'MEALPREP', 'EVENTS', 'PAYATTN', 'REMDATES', 'TRAVEL']
     HV_RAW   = ['HEARING', 'HEARAID', 'HEARWAID', 'VISION', 'VISCORR', 'VISWCORR']
 
-    files = [f"{n}visit_combined.csv" for n in range(min_visits, max_visits + 1)]
+    # ── Build one-row-per-subject DataFrame from source CSV ───────────────
+    if verbose:
+        print(f"Building subject DataFrame from {source_csv} ...")
+    subject_df = build_subject_df(
+        source_csv,
+        min_visits=min_visits,
+        max_visits=max_visits,
+    )
+    if verbose:
+        print(f"  {len(subject_df)} subjects ({subject_df['n_visits'].min()}–"
+              f"{subject_df['n_visits'].max()} visits)")
 
-    for fname in files:
-        fpath = os.path.join(source_dir, fname)
-        if not os.path.exists(fpath):
-            if verbose:
-                print(f"  ⚠ {fname} not found, skipping")
-            continue
-        n_visits = int(fname.split("visit")[0])
+    # ── Clean scalar sentinel values ──────────────────────────────────────
+    # ALCOHOL: keep ordinal; 9 (unknown) and -4 (not available) → NaN
+    if 'ALCOHOL' in subject_df.columns:
+        subject_df['ALCOHOL'] = subject_df['ALCOHOL'].replace([-4, 9], np.nan)
+
+    # SMOKYRS: 888 = "not assessed", -4 = "not available" → NaN
+    if 'SMOKYRS' in subject_df.columns:
+        subject_df['SMOKYRS'] = subject_df['SMOKYRS'].replace([-4, 888], np.nan)
+
+    # Comorbidity columns — binary recode:
+    #   1 (Recent/Active)   → 1
+    #   0 (Absent), 2 (Remote/Inactive), 8, 9 (Unknown), -4 (N/A) → 0
+    # Only an active/recent condition is treated as present.
+    _COMORBIDITY_COLS = [
+        'NACCFAM', 'CVHATT', 'CVAFIB', 'DIABETES',
+        'HYPERCHO', 'HYPERTEN', 'B12DEF', 'DEPD', 'ANX', 'NACCTBI',
+    ]
+    for col in _COMORBIDITY_COLS:
+        if col in subject_df.columns:
+            subject_df[col] = (subject_df[col] == 1).astype(int)
+
+    # ── Remove Unknown-labelled subjects ──────────────────────────────────
+    # Label 3 = Unknown (no coding rule matched). These subjects have at least
+    # one visit that is neither CN (0), MCI (1), nor AD (2) and must be excluded.
+    before = len(subject_df)
+    subject_df = subject_df[subject_df['Progression'].apply(
+        lambda p: 3 not in (eval(p) if isinstance(p, str) else p)
+    )].copy()
+    if verbose:
+        removed = before - len(subject_df)
+        if removed:
+            print(f"  Removed {removed} subjects with Unknown-labelled visits")
+
+    # ── Process each visit-count group ────────────────────────────────────
+    for n_visits, df in subject_df.groupby('n_visits'):
+        df = df.copy()
+        label = f"{n_visits}visit"
         if verbose:
-            print(f"── {fname} ", end="")
+            print(f"── {label} ({len(df)} subjects) ", end="")
 
-        df = pd.read_csv(fpath)
+        # ── 1. Parse list-string columns & clean sentinels ───────────────
+        # build_subject_df stores raw numeric values; sentinel codes must be
+        # converted to NaN before any NaN-based filters or imputation below.
+        for col in _LONG_COLS:
+            if col in df.columns:
+                df[col] = df[col].apply(_parse_list_col)
 
-        # Drop unnamed index column if present
-        if df.columns[0].startswith("Unnamed"):
-            df.drop(df.columns[0], axis=1, inplace=True)
+        # Column-specific sentinel sets (NACC data dictionary)
+        df['NACCBMI']  = df['NACCBMI'].apply(lambda r: _clean_sentinel(r, {-4, 888, 888.8}))
+        df['NACCMMSE'] = df['NACCMMSE'].apply(lambda r: _clean_sentinel(r, {-4, 88, 95, 96, 97, 98, 888}))
+        df['NACCGDS']  = df['NACCGDS'].apply(lambda r: _clean_sentinel(r, {-4, 88}))
+        df['CDRSUM']   = df['CDRSUM'].apply(lambda r: _clean_sentinel(r, {-4}))
+        df['TOBAC30']  = df['TOBAC30'].apply(lambda r: _clean_sentinel(r, {-4, 9}))
+        df['NACCLIVS'] = df['NACCLIVS'].apply(lambda r: _clean_sentinel(r, {-4, 8, 9}))
+        df['COMMUN']   = df['COMMUN'].apply(lambda r: _clean_sentinel(r, {-4, 8, 9}))
+        for col in FAQ_COLS:
+            if col in df.columns:
+                df[col] = df[col].apply(lambda r: _clean_sentinel(r, {-4, 9, 8}))
+        for col in HV_RAW:
+            if col in df.columns:
+                df[col] = df[col].apply(lambda r: _clean_sentinel(r, {-4, 9, 8}))
 
-        # ── 1. Parse list-string columns ──────────────────────────────────
-        df['BMI']  = df['BMI'].apply(_parse_list_col)
-        df['MMSE'] = df['MMSE'].apply(_parse_list_col)
-
-        # ── 2. Drop rows where ALL BMI entries are NaN ────────────────────
+        # ── 2. Drop rows where ALL NACCBMI entries are NaN ───────────────
         n0 = len(df)
-        df = df[df['BMI'].apply(lambda x: not all(pd.isna(v) for v in x) if isinstance(x, list) else True)]
-        stats["bmi_dropped"][fname] = n0 - len(df)
+        df = df[df['NACCBMI'].apply(
+            lambda x: not all(pd.isna(v) for v in x) if isinstance(x, list) else True
+        )]
+        stats["bmi_dropped"][label] = n0 - len(df)
 
         # ── 3. Drop subjects below min_age ────────────────────────────────
         n0 = len(df)
         df = df[df['age'] >= min_age]
-        stats["age_dropped"][fname] = n0 - len(df)
+        stats["age_dropped"][label] = n0 - len(df)
 
         # ── 4. MMSE tolerance filtering ───────────────────────────────────
-        tol = mmse_tol.get(n_visits, 4)
+        tol = _mmse_tol(n_visits)
         n0 = len(df)
         if n_visits >= 6:
-            # split MCI/AD NP for special rule (allow 1 NaN in first 5 visits)
             df_main, df_np = _split_mci_ad_np(df)
-            df_main = df_main[df_main['MMSE'].apply(
+            df_main = df_main[df_main['NACCMMSE'].apply(
                 lambda x: sum(pd.isna(v) for v in x) <= tol if isinstance(x, list) else True)]
             if not df_np.empty:
-                df_np = df_np[df_np['MMSE'].apply(
+                df_np = df_np[df_np['NACCMMSE'].apply(
                     lambda x: (sum(pd.isna(v) for v in x) <= tol or
                                sum(pd.isna(v) for v in x[:5]) <= 1)
                     if isinstance(x, list) else True)]
             df = pd.concat([df_main, df_np], axis=0)
         else:
-            df = df[df['MMSE'].apply(
+            df = df[df['NACCMMSE'].apply(
                 lambda x: sum(pd.isna(v) for v in x) <= tol if isinstance(x, list) else True)]
-        stats["mmse_dropped"][fname] = n0 - len(df)
+        stats["mmse_dropped"][label] = n0 - len(df)
 
         if df.empty:
             if verbose:
                 print("→ empty after filtering, skipped")
             continue
 
-        # ── 5. Sentinel-value cleaning ────────────────────────────────────
-        df['GDS']    = df['GDS'].apply(lambda r: _clean_sentinel(r, {-4, 88}))
-        df['TOBAC30'] = df['TOBAC30'].apply(lambda r: _clean_sentinel(r, {-4, 9}))
-        for col in FAQ_COLS:
-            df[col] = df[col].apply(lambda r: _clean_sentinel(r, {-4, 9, 8}))
-        for col in HV_RAW:
-            df[col] = df[col].apply(lambda r: _clean_sentinel(r, {-4, 9, 8}))
-
-        # ── 6. Optional imputation ────────────────────────────────────────
+        # ── 5. Optional imputation ────────────────────────────────────────
         if do_impute:
-            imp_cats = ['TOBAC30'] + FAQ_COLS + HV_RAW
-            df['GDS'] = df['GDS'].apply(
+            imp_cats = ['TOBAC30'] + FAQ_COLS
+            df['NACCGDS'] = df['NACCGDS'].apply(
                 lambda x: eval(x.replace("nan", "np.nan")) if isinstance(x, str) else x
             ).apply(impute_gds)
             for v in imp_cats:
-                df[v] = df[v].apply(
-                    lambda x: eval(x.replace("nan", "np.nan")) if isinstance(x, str) else x
-                ).apply(m_impute)
-            df['BMI'] = df['BMI'].apply(_impute_bmi)
+                if v in df.columns:
+                    df[v] = df[v].apply(
+                        lambda x: eval(x.replace("nan", "np.nan")) if isinstance(x, str) else x
+                    ).apply(m_impute)
+            df['NACCBMI'] = df['NACCBMI'].apply(_impute_bmi)
 
-        # ── 7. Create hearing / vision composites ─────────────────────────
-        create_hv(df)
+        # ── 6. Create hearing / vision composites ─────────────────────────
+        df = create_hv(df)
         df.drop(columns=HV_RAW, inplace=True, errors='ignore')
 
         if verbose:
             print(f"→ {len(df)} rows")
 
-        # ── 8. Split into CN-starting vs MCI-starting ────────────────────
+        # ── 7. Split CN-starting vs MCI-starting ─────────────────────────
+        # CN group: first visit label == 0
+        # MCI group: first visit label == 1 (AD-only starters discarded)
         cn_idx = _cn_starting_indices(df)
         cn_group = df.iloc[cn_idx].copy()
-        mci_group = df.drop(df.index[cn_idx]).copy()
+        rest = df.drop(df.index[cn_idx])
+        mci_idx = [i for i, (_, r) in enumerate(rest.iterrows())
+                   if _get_progression(r)[0] == 1]
+        mci_group = rest.iloc[mci_idx].copy()
 
-        # detect and remove reverters
+        # ── 8. Remove reverters ───────────────────────────────────────────
         rev_cn = _detect_reverters(cn_group, 'CN_MCI')
         rev_ma = _detect_reverters(mci_group, 'MCI_AD')
         if rev_cn:
@@ -783,56 +836,47 @@ def run_pipeline(
             reverters_mci_ad.append(mci_group.iloc[rev_ma])
             mci_group = mci_group.drop(mci_group.index[rev_ma])
 
-        # ── 9. Route to pooled (2–5) or lead-time (6–10) accumulators ────
-        if n_visits <= 5:
-            if not cn_group.empty:
-                pool_cn.append(cn_group)
-            if not mci_group.empty:
-                pool_mci_ad.append(mci_group)
-        else:
-            # 6–10 visits: keep full sequences for lead-time testing
-            if not cn_group.empty:
-                lead_cn.append(cn_group)
-            if not mci_group.empty:
-                lead_mci_ad.append(mci_group)
+        # ── 9. 5% lead-time stratified split ─────────────────────────────
+        # Four classes within each group; sample ceil(5%) from each class.
+        def _lead_split(group):
+            """Return (lead_df, pooled_df) with stratified 5% lead-time sample."""
+            lead_parts, pool_parts = [], []
+            for pid in [0, 1]:
+                subset = group[group['Prog_ID'] == pid]
+                if subset.empty:
+                    continue
+                k = math.ceil(len(subset) * lead_time_pct)
+                sampled = subset.sample(n=k, random_state=42)
+                lead_parts.append(sampled)
+                pool_parts.append(subset.drop(sampled.index))
+            lead_df = pd.concat(lead_parts) if lead_parts else pd.DataFrame()
+            pool_df = pd.concat(pool_parts) if pool_parts else pd.DataFrame()
+            return lead_df, pool_df
 
-    # ── Save pooled 2–5 visit datasets ────────────────────────────────────
-    if pool_cn:
-        pooled_cn_df = pd.concat(pool_cn, axis=0).reset_index(drop=True)
-        assert pooled_cn_df['ID'].is_unique, \
-            f"Duplicate IDs in pooled_CN: {pooled_cn_df['ID'][pooled_cn_df['ID'].duplicated()].tolist()}"
-        pooled_cn_df.to_csv(os.path.join(dest_dir, "pooled_CN.csv"), index=False)
-        if verbose:
-            n_prog = int((pooled_cn_df['Prog_ID'] == 1).sum())
-            print(f"  pooled_CN.csv: {len(pooled_cn_df)} rows "
-                  f"(prog: {n_prog}, non-prog: {len(pooled_cn_df) - n_prog})")
+        cn_lead, cn_pool   = _lead_split(cn_group)
+        mci_lead, mci_pool = _lead_split(mci_group)
 
-    if pool_mci_ad:
-        pooled_mci_df = pd.concat(pool_mci_ad, axis=0).reset_index(drop=True)
-        assert pooled_mci_df['ID'].is_unique, \
-            f"Duplicate IDs in pooled_MCI_AD: {pooled_mci_df['ID'][pooled_mci_df['ID'].duplicated()].tolist()}"
-        pooled_mci_df.to_csv(os.path.join(dest_dir, "pooled_MCI_AD.csv"), index=False)
-        if verbose:
-            n_prog = int((pooled_mci_df['Prog_ID'] == 1).sum())
-            print(f"  pooled_MCI_AD.csv: {len(pooled_mci_df)} rows "
-                  f"(prog: {n_prog}, non-prog: {len(pooled_mci_df) - n_prog})")
+        if not cn_pool.empty:   pool_cn.append(cn_pool)
+        if not mci_pool.empty:  pool_mci_ad.append(mci_pool)
+        if not cn_lead.empty:   lead_cn.append(cn_lead)
+        if not mci_lead.empty:  lead_mci_ad.append(mci_lead)
 
-    # ── Save lead-time datasets (6–10 visits, full sequences) ─────────────
-    if lead_cn:
-        lead_cn_df = pd.concat(lead_cn, axis=0).reset_index(drop=True)
-        lead_cn_df.to_csv(os.path.join(dest_dir, "lead_time_CN.csv"), index=False)
+    # ── Save pooled datasets ──────────────────────────────────────────────
+    def _save(frames, fname, label):
+        if not frames:
+            return
+        out = pd.concat(frames, axis=0).reset_index(drop=True)
+        assert out['ID'].is_unique, \
+            f"Duplicate IDs in {fname}: {out['ID'][out['ID'].duplicated()].tolist()}"
+        out.to_csv(os.path.join(dest_dir, fname), index=False)
         if verbose:
-            n_prog = int((lead_cn_df['Prog_ID'] == 1).sum())
-            print(f"  lead_time_CN.csv: {len(lead_cn_df)} rows "
-                  f"(prog: {n_prog}, non-prog: {len(lead_cn_df) - n_prog})")
+            n_prog = int((out['Prog_ID'] == 1).sum())
+            print(f"  {fname}: {len(out)} rows (prog: {n_prog}, non-prog: {len(out) - n_prog})")
 
-    if lead_mci_ad:
-        lead_mci_df = pd.concat(lead_mci_ad, axis=0).reset_index(drop=True)
-        lead_mci_df.to_csv(os.path.join(dest_dir, "lead_time_MCI_AD.csv"), index=False)
-        if verbose:
-            n_prog = int((lead_mci_df['Prog_ID'] == 1).sum())
-            print(f"  lead_time_MCI_AD.csv: {len(lead_mci_df)} rows "
-                  f"(prog: {n_prog}, non-prog: {len(lead_mci_df) - n_prog})")
+    _save(pool_cn,    "pooled_CN.csv",        "pooled CN")
+    _save(pool_mci_ad, "pooled_MCI_AD.csv",   "pooled MCI/AD")
+    _save(lead_cn,    "lead_time_CN.csv",     "lead-time CN")
+    _save(lead_mci_ad, "lead_time_MCI_AD.csv", "lead-time MCI/AD")
 
     # ── Save reverters ────────────────────────────────────────────────────
     if reverters_cn:
@@ -846,7 +890,7 @@ def run_pipeline(
         for key in ("bmi_dropped", "mmse_dropped", "age_dropped"):
             for f, n in stats[key].items():
                 if n:
-                    print(f"  {f}: {n} rows ({key.replace('_', ' ')})")
+                    print(f"  {f}: {n} rows ({key.replace('_', ' ')})")        
         n_rev_cn = sum(len(r) for r in reverters_cn) if reverters_cn else 0
         n_rev_ma = sum(len(r) for r in reverters_mci_ad) if reverters_mci_ad else 0
         print(f"  Reverters saved — CN: {n_rev_cn}, MCI/AD: {n_rev_ma}")

@@ -17,7 +17,6 @@ from sklearn.impute import SimpleImputer
 from scipy.stats import linregress
 import matplotlib.pyplot as plt
 import seaborn as sns
-# Removed pauc partial AUC dependency; using manual bootstrap for full ROC AUC CI
 import os
 import itertools
 import warnings
@@ -1407,6 +1406,8 @@ def eval_model(model, x, y):
 # ═══════════════════════════════════════════════════════════════════════════════
 #  LEAD-TIME ANALYSIS  
 # ═══════════════════════════════════════════════════════════════════════════════
+
+### Note: This will all need to be changed to the new lead time cohort structure/experimental design. 
 
 def add_time_dimension(df, months_between_visits=12):
     """Add a ``months_since_baseline`` column (list per patient) to *df*."""

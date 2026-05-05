@@ -1,9 +1,26 @@
-I want to create a preprocessing pipeline to create multiple raw cohort datasets for testing out different imputation strategies and different models with. 
-The dataset is in 'investigator_ftldlbd_nacc72.csv', and the keys of unique ids (patients) is in unique_idsv2.txt. 
+05-05-26 Changes Planned for preprocessing pipeline. 
+Explanation. the current structure of preprocessing pipeline exists because there was a directory of raw partially processed csv files that had been created. Now, the entire pipeline needs to be called with the source csv file as a parameter, and an destination directory specified as before. 
 
-The preprocessing.py file has many functions that can be reused, but the feature selection and recoding took place in preprocessing.ipynb previously. The end result of the pipeline should produce a folder with csv for parsed for each visit group, plus a group of reverters (who will not be included in the model, but will be analyzed.)
+Look at datasets/Dataset_pooled/pooled_CN.csv (first few rows) as a sample of what the old csv output would be. 
+First replicate the logic with ID's and progression vectors. 
+df = pd.read_csv('investigator_ftldlbd_nacc72.csv') is the new file location. 
 
-Everything should be properly recoded to nan, in the final dataset, and keep the combined up to 10 visit group. All people below the age of 50 should be dropped. 
-In the raw cohorts the patients can be combined into how many visits they are. 
+Existing columns with no change needed. 
+    - ID = NACCID
+    - age = NACCAGEB
+    - SEX,EDUC,ALCOHOL,BMI,MMSE,GDS,CDR,TOBAC30,BILLS,TAXES,SHOPPING,GAMES,STOVE,MEALPREP,EVENTS,PAYATTN,REMDATES,TRAVEL,NACCFAM,CVHATT,CVAFIB,DIABETES,HYPERCHO,HYPERTEN,B12DEF,DEPD,ANX,NACCTBI,SMOKYRS,RACE,age,HISPANIC,hearing,vision
+    - note hearing and vision are composites of other variables from the original dataframe, see in preprocessing how this is implemnted. 
+NEW columns
+    - months since baseline. Use NACCFDYS - Days from initial visit to each follow-up visit to create a list of months since baseline so I can calculate the true visit intervals. e.g. [0.0, 13.11, 25.33, 37.06, 52.0]
+    - NACCLIVS
+    - COMMUN. 
 
-Look at the features in the 2visit_CN_MCI.csv to get a comprehebsive list of features that should be in the dataframe. Do 2-10 visits. Make a callable pipeline that I can test out on the full dataset with clear concise, extendable code. Make sure that the reverters are properly dropped as well but perserved in a separate file. 
+run_pipeline() changes. 
+    - lead time cohort is no longer going to be sliced from 6-10. Lead time cohort will be from the same visit range as the additional set. It will just be a 5% group that will be taken as evenly as possible from each visit cohort (i.e. 2visit, 3visit ... nvisit. ), trying to balance between four classes: CN non progressor, CN progressor, MCI nonprogressor, MCI progressor. 
+    - min_age parameter from the top of run_pipeline() can filter this directly to drop out any below this. 
+    - it should output files the same way as before. 
+        lead_time_CN.csv        pooled_CN.csv           reverters_CN.csv
+        lead_time_MCI_AD.csv    pooled_MCI_AD.csv       reverters_MCI_AD.csv
+    - Look to keep things robust and remove or condense any unecessary functions. 
+    
+
