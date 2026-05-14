@@ -439,7 +439,7 @@ def build_subject_df(
         HEARING, HEARAID, HEARWAID, VISION, VISCORR, VISWCORR,
         NACCLIVS, COMMUN, months_since_baseline
     """
-    raw = pd.read_csv(source_csv)
+    raw = pd.read_csv(source_csv, low_memory=False)
 
     # Sort visits chronologically within each subject
     raw = raw.sort_values(['NACCID', 'NACCVNUM'])
