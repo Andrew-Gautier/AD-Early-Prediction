@@ -24,3 +24,8 @@ run_pipeline() changes.
     - Look to keep things robust and remove or condense any unecessary functions. 
     
 
+05-14
+Notes: Added APOE4 variable, NACCNE4S, categorical. 
+Dropped MMSE and BMI requirements. 
+Fixed low memory warning on pandas df copying. 
+Future work: Add new imputation strategies. remove old mean/most frequent ones? 
