@@ -406,6 +406,7 @@ _SCALAR_COLS = [
     'SEX', 'EDUC', 'ALCOHOL', 'NACCFAM',
     'CVHATT', 'CVAFIB', 'DIABETES', 'HYPERCHO', 'HYPERTEN',
     'B12DEF', 'DEPD', 'ANX', 'NACCTBI', 'SMOKYRS', 'RACE', 'HISPANIC',
+    'NACCNE4S',
 ]
 
 # Numeric coding for label_visit string output → integer used in Progression
@@ -667,21 +668,13 @@ def run_pipeline(
     import math
 
     os.makedirs(dest_dir, exist_ok=True)
-    stats = {"bmi_dropped": {}, "mmse_dropped": {}, "age_dropped": {}}
+    stats = {"age_dropped": {}}
     reverters_cn = []
     reverters_mci_ad = []
     pool_cn = []
     pool_mci_ad = []
     lead_cn = []
     lead_mci_ad = []
-
-    # MMSE tolerance: max allowed NaN per visit count
-    # For visit counts beyond 10, extend at +1 per 2 extra visits
-    def _mmse_tol(n):
-        base = {2: 0, 3: 0, 4: 1, 5: 1, 6: 2, 7: 2, 8: 3, 9: 3, 10: 4}
-        if n in base:
-            return base[n]
-        return 4 + (n - 10 + 1) // 2
 
     FAQ_COLS = ['BILLS', 'TAXES', 'SHOPPING', 'GAMES', 'STOVE',
                 'MEALPREP', 'EVENTS', 'PAYATTN', 'REMDATES', 'TRAVEL']
@@ -707,6 +700,11 @@ def run_pipeline(
     # SMOKYRS: 888 = "not assessed", -4 = "not available" → NaN
     if 'SMOKYRS' in subject_df.columns:
         subject_df['SMOKYRS'] = subject_df['SMOKYRS'].replace([-4, 888], np.nan)
+
+    # NACCNE4S: 9 = missing/unknown → NaN; cast to nullable Int64 so values
+    # serialize as integers (0, 1, 2) rather than floats (0.0, 1.0, 2.0)
+    if 'NACCNE4S' in subject_df.columns:
+        subject_df['NACCNE4S'] = subject_df['NACCNE4S'].replace(9, np.nan).astype('Int64')
 
     # Comorbidity columns — binary recode:
     #   1 (Recent/Active)   → 1
@@ -761,42 +759,17 @@ def run_pipeline(
             if col in df.columns:
                 df[col] = df[col].apply(lambda r: _clean_sentinel(r, {-4, 9, 8}))
 
-        # ── 2. Drop rows where ALL NACCBMI entries are NaN ───────────────
-        n0 = len(df)
-        df = df[df['NACCBMI'].apply(
-            lambda x: not all(pd.isna(v) for v in x) if isinstance(x, list) else True
-        )]
-        stats["bmi_dropped"][label] = n0 - len(df)
-
-        # ── 3. Drop subjects below min_age ────────────────────────────────
+        # ── 2. Drop subjects below min_age ────────────────────────────────
         n0 = len(df)
         df = df[df['age'] >= min_age]
         stats["age_dropped"][label] = n0 - len(df)
-
-        # ── 4. MMSE tolerance filtering ───────────────────────────────────
-        tol = _mmse_tol(n_visits)
-        n0 = len(df)
-        if n_visits >= 6:
-            df_main, df_np = _split_mci_ad_np(df)
-            df_main = df_main[df_main['NACCMMSE'].apply(
-                lambda x: sum(pd.isna(v) for v in x) <= tol if isinstance(x, list) else True)]
-            if not df_np.empty:
-                df_np = df_np[df_np['NACCMMSE'].apply(
-                    lambda x: (sum(pd.isna(v) for v in x) <= tol or
-                               sum(pd.isna(v) for v in x[:5]) <= 1)
-                    if isinstance(x, list) else True)]
-            df = pd.concat([df_main, df_np], axis=0)
-        else:
-            df = df[df['NACCMMSE'].apply(
-                lambda x: sum(pd.isna(v) for v in x) <= tol if isinstance(x, list) else True)]
-        stats["mmse_dropped"][label] = n0 - len(df)
 
         if df.empty:
             if verbose:
                 print("→ empty after filtering, skipped")
             continue
 
-        # ── 5. Optional imputation ────────────────────────────────────────
+        # ── 3. Optional imputation ────────────────────────────────────────
         if do_impute:
             imp_cats = ['TOBAC30'] + FAQ_COLS
             df['NACCGDS'] = df['NACCGDS'].apply(
@@ -809,14 +782,14 @@ def run_pipeline(
                     ).apply(m_impute)
             df['NACCBMI'] = df['NACCBMI'].apply(_impute_bmi)
 
-        # ── 6. Create hearing / vision composites ─────────────────────────
+        # ── 4. Create hearing / vision composites ─────────────────────────
         df = create_hv(df)
         df.drop(columns=HV_RAW, inplace=True, errors='ignore')
 
         if verbose:
             print(f"→ {len(df)} rows")
 
-        # ── 7. Split CN-starting vs MCI-starting ─────────────────────────
+        # ── 5. Split CN-starting vs MCI-starting ─────────────────────────
         # CN group: first visit label == 0
         # MCI group: first visit label == 1 (AD-only starters discarded)
         cn_idx = _cn_starting_indices(df)
@@ -826,7 +799,7 @@ def run_pipeline(
                    if _get_progression(r)[0] == 1]
         mci_group = rest.iloc[mci_idx].copy()
 
-        # ── 8. Remove reverters ───────────────────────────────────────────
+        # ── 6. Remove reverters ───────────────────────────────────────────
         rev_cn = _detect_reverters(cn_group, 'CN_MCI')
         rev_ma = _detect_reverters(mci_group, 'MCI_AD')
         if rev_cn:
@@ -836,7 +809,7 @@ def run_pipeline(
             reverters_mci_ad.append(mci_group.iloc[rev_ma])
             mci_group = mci_group.drop(mci_group.index[rev_ma])
 
-        # ── 9. 5% lead-time stratified split ─────────────────────────────
+        # ── 7. 5% lead-time stratified split ─────────────────────────────
         # Four classes within each group; sample ceil(5%) from each class.
         def _lead_split(group):
             """Return (lead_df, pooled_df) with stratified 5% lead-time sample."""
@@ -887,7 +860,7 @@ def run_pipeline(
     # ── Summary ───────────────────────────────────────────────────────────
     if verbose:
         print("\n── Drop summary ──")
-        for key in ("bmi_dropped", "mmse_dropped", "age_dropped"):
+        for key in ("age_dropped",):
             for f, n in stats[key].items():
                 if n:
                     print(f"  {f}: {n} rows ({key.replace('_', ' ')})")        

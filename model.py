@@ -344,7 +344,7 @@ def preprocess_data(df, progression_type, mmse_only=False):
     static_features = [
         'SEX', 'EDUC', 'ALCOHOL', 'NACCFAM', 'CVHATT', 
         'CVAFIB', 'DIABETES', 'HYPERCHO', 'HYPERTEN', 'B12DEF', 'DEPD', 
-        'ANX', 'NACCTBI', 'SMOKYRS', 'RACE', 'age', 'HISPANIC'
+        'ANX', 'NACCTBI', 'SMOKYRS', 'RACE', 'age', 'HISPANIC', 'NACCNE4S'
     ]
     
     # Time-series features — visit-agnostic summary statistics
