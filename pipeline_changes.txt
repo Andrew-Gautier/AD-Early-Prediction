@@ -29,3 +29,8 @@ Notes: Added APOE4 variable, NACCNE4S, categorical.
 Dropped MMSE and BMI requirements. 
 Fixed low memory warning on pandas df copying. 
 Future work: Add new imputation strategies. remove old mean/most frequent ones? 
+
+05-20
+
+Next step on the pipeline will be to support MICE/and or more sophisticated imputation methods. Taking context from missingness variable analysis in demographics.ipynb. To clarify further, no imputation should take place in model.py it should be done here.  
+
