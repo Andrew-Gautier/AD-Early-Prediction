@@ -11,7 +11,6 @@ from sklearn.metrics import (
     f1_score,
 )
 from xgboost import XGBClassifier
-from sklearn.impute import SimpleImputer
 import os
 import itertools
 import warnings
@@ -23,9 +22,7 @@ except ImportError:
     def tqdm(iterable, **kwargs):
         return iterable
 from preprocessing import create_target
-from feature_engineering import create_delta_features
-
-XGBOOST_PARAMS = []
+from feature_engineering import create_delta_features, preprocess_data
 
 def bootstrap_all_metrics_ci(
     y_true,
@@ -128,59 +125,28 @@ def bootstrap_all_metrics_ci(
     return results
 
 # Preprocess the data
-def preprocess_data(df, progression_type):
-    # Create target variable if not already present
-    if 'target' not in df.columns:
-        df['target'] = df['Progression'].apply(create_target, progression_type=progression_type)
-    
-    # Get all available features (after create_delta_features transformation)
-    all_features = [col for col in df.columns if col != 'target']
-    
-    # Select features we want to keep
-    # Static features (non-time-series)
-    static_features = [
-        'SEX', 'EDUC', 'ALCOHOL', 'NACCFAM', 'CVHATT', 
-        'CVAFIB', 'DIABETES', 'HYPERCHO', 'HYPERTEN', 'B12DEF', 'DEPD', 
-        'ANX', 'NACCTBI', 'SMOKYRS', 'RACE', 'age', 'HISPANIC', 'NACCNE4S'
-    ]
-    
-    # Time-series features — visit-agnostic summary statistics
-    _TS_SUFFIXES = ('_slope', '_mean', '_max', '_min', '_std', '_range',
-                    '_first', '_last', '_last_minus_first', '_acceleration',
-                    '_n_visits')
-    time_series_features = [col for col in all_features if any(s in col for s in _TS_SUFFIXES)]
-    
-    # Only keep features that actually exist in the dataframe
-    static_features = [f for f in static_features if f in df.columns]
-    
-    # Combine all features
-    features = static_features + time_series_features
-    
-    # Handle missing values
-    df = df[features + ['target']].copy()
-    df = df.dropna(subset=features, how='all')
-    
-    # Convert categorical variables
-    categorical_cols = ['SEX', 'NACCFAM', 'CVHATT', 'CVAFIB', 'DIABETES', 
-                       'HYPERCHO', 'HYPERTEN', 'B12DEF', 'DEPD', 'ANX', 'NACCTBI', 'RACE']
-    categorical_cols = [col for col in categorical_cols if col in df.columns]  # Only keep existing cols
-    for col in categorical_cols:
-        df[col] = df[col].astype('category').cat.codes  # Convert to numeric codes
-    
-    # Return processed DataFrame without imputation/scaling to avoid leakage
-    # Keep return signature compatibility (scaler, imputer as None)
-    return df, None, None
 
 
-def _fit_xgb(X_tr, X_te, y_tr, params, n_jobs=None):
-    """Fit imputer/scaler/XGBoost on training data; return predictions on test data.
+def _fit_xgb(X_tr, X_te, y_tr, params, n_jobs=None, scale=False):
+    """Fit (optional scaler +) XGBoost on training data; return predictions on test data.
+
+    Parameters
+    ----------
+    scale : bool, default False
+        When True, apply StandardScaler to X_tr / X_te before fitting.
 
     Returns (model, imputer, scaler, y_pred, y_proba).
+    imputer is always None (reserved for future re-addition).
+    scaler  is None when scale=False.
     """
-    imputer = SimpleImputer(strategy='mean')
-    scaler = StandardScaler()
-    X_tr_proc = scaler.fit_transform(imputer.fit_transform(X_tr))
-    X_te_proc = scaler.transform(imputer.transform(X_te))
+    if scale:
+        scaler = StandardScaler()
+        X_tr_proc = scaler.fit_transform(X_tr)
+        X_te_proc = scaler.transform(X_te)
+    else:
+        scaler = None
+        X_tr_proc = X_tr
+        X_te_proc = X_te
 
     n_neg = int((y_tr == 0).sum())
     n_pos = int((y_tr == 1).sum())
@@ -195,13 +161,14 @@ def _fit_xgb(X_tr, X_te, y_tr, params, n_jobs=None):
         subsample=params['subsample'],
         colsample_bytree=params['colsample_bytree'],
         scale_pos_weight=spw,
+        enable_categorical=True,
         n_jobs=n_jobs,
         random_state=42,
     )
     model.fit(X_tr_proc, y_tr)
     y_proba = model.predict_proba(X_te_proc)[:, 1]
     y_pred = model.predict(X_te_proc)
-    return model, imputer, scaler, y_pred, y_proba
+    return model, None, scaler, y_pred, y_proba
 
 
 def _print_bootstrap_ci(metrics):

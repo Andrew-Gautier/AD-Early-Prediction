@@ -1,17 +1,9 @@
 
-05-20
+05-21
 
-These changes are relevant to model.py. 
+These changes are going to combine create_delta_features and preprocess_data in the calls of model.py
 
-Step 1. Add additional variables that were included in most recent changes to the pipeline including variables NACCFDYS (months since baseline numeric longituindal), NACCLIVS, COMMUN, and NACCNE4S. 
-Step 2. SMOTE is to be removed from the model. 
-Step 3. Remove standaridization and normalization from the model. 
-Step 4. With SMOTE, imputation, and preproecssing removed, look to condense unecessary methods and preprocessing calls. Future recoding of variables will be built in preprocessing and then called in model. 
-Step 5. Provide a simple readme of how a XGBoost model experiment could be run with SKF and LOOCV affter these changes have been implemented. 
-
-Future Steps DO NOT IMPLEMENT
-
-
+Step 1. Use the four columns from feature_engineering.py 
 Step 6. Overhaul of XGBoost parameters. 
     - colsample 
     - cateogorical support
