@@ -209,6 +209,19 @@ def _process_mmse_values(imputed_mmse, orig_lengths=None):
         processed.append([min(round(float(val), 2), 30.0) for val in row[:n]])
     return processed
 
+def create_target(progression, progression_type):
+    """Return a binary target label (0 or 1) from a Progression tuple.
+
+    progression_type 'AD' : 1 if the patient ever reached AD (any visit == 2)
+    progression_type 'CN' : 1 if the patient ever progressed beyond CN (any visit > 0)
+    """
+    if isinstance(progression, str):
+        progression = eval(progression)
+    if progression_type == 'AD':
+        return 1 if 2 in progression else 0
+    return 1 if any(v > 0 for v in progression) else 0
+
+
 def fit_mmse_imputer(df, covariates):
     """Fit an IterativeImputer on df's MMSE + covariates and return (fitted_imputer, imputed_df).
     

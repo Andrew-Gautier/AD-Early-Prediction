@@ -4,9 +4,7 @@ from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import (
     classification_report,
-    confusion_matrix,
     roc_auc_score,
-    roc_curve,
     accuracy_score,
     precision_score,
     recall_score,
@@ -14,9 +12,6 @@ from sklearn.metrics import (
 )
 from xgboost import XGBClassifier
 from sklearn.impute import SimpleImputer
-from scipy.stats import linregress
-import matplotlib.pyplot as plt
-import seaborn as sns
 import os
 import itertools
 import warnings
@@ -27,146 +22,10 @@ try:
 except ImportError:
     def tqdm(iterable, **kwargs):
         return iterable
-from preprocessing import fit_mmse_imputer, transform_mmse, _LONG_COLS, _SCALAR_COLS
+from preprocessing import create_target
+from feature_engineering import create_delta_features
 
 XGBOOST_PARAMS = []
-
-# Covariates used for MMSE iterative imputation (must be present in the raw DataFrame)
-MMSE_COVARIATES = ['EDUC', 'GDS', 'CDR', 'TOBAC30', 'BILLS', 'TAXES', 'SHOPPING',
-                   'GAMES', 'STOVE', 'MEALPREP', 'EVENTS', 'PAYATTN', 'REMDATES',
-                   'TRAVEL', 'hearing', 'vision']
-
-
-
-# This is the classifer used for visits 2-6 classification scores and charts. 
-
-def create_target_variable_ad(row):
-    """Create binary target from Progression column (1=progressed, 0=stable)"""
-    progression = eval(row['Progression'])  # Convert string tuple to actual tuple
-    return 1 if 2 in progression else 0  # 1 if progressed to AD at any visit
-def create_target_variable_cn(row):
-    """Create binary target for CN-starting patients.
-    1 = progressed to MCI (1) or AD (2) at any visit, 0 = stable CN."""
-    progression = eval(row['Progression'])  # Convert string tuple to actual tuple
-    return 1 if any(v > 0 for v in progression) else 0
-
-# Keep old name as alias for backwards compatibility
-create_target_variable_mci = create_target_variable_cn
-def _parse_array_columns(df):
-    """Convert array-string columns (e.g. '[1.0, 2.5, nan]') to lists of floats in-place."""
-    for col in df.columns:
-        if df[col].dtype == object and df[col].str.startswith('[').any():
-            df[col] = df[col].apply(
-                lambda x: [float(v.strip()) if v.strip() != 'nan' else np.nan
-                           for v in x.replace('[', '').replace(']', '').split(',')]
-                if isinstance(x, str) and x.startswith('[') else np.nan
-            )
-
-
-def _is_numeric_list_col(series):
-    """True if the first element is a list of numeric values."""
-    first = series.iloc[0]
-    return (isinstance(first, list)
-            and all(isinstance(v, (int, float)) for v in first if not pd.isna(v)))
-
-
-def _has_valid(x):
-    return isinstance(x, list) and np.any(~np.isnan(x))
-
-
-def _first_valid(x):
-    if not isinstance(x, list):
-        return np.nan
-    return next((v for v in x if not np.isnan(v)), np.nan)
-
-
-def _last_valid(x):
-    if not isinstance(x, list):
-        return np.nan
-    return next((v for v in reversed(x) if not np.isnan(v)), np.nan)
-
-
-def _calc_slope(x):
-    if isinstance(x, list) and len(x) > 1:
-        xv = np.arange(len(x))
-        yv = np.array(x)
-        valid = ~np.isnan(yv)
-        if valid.sum() > 1:
-            return linregress(xv[valid], yv[valid]).slope
-    return np.nan
-
-
-def _calc_acceleration(x):
-    """Slope of consecutive deltas (2nd derivative). Needs >= 3 non-NaN values."""
-    if not isinstance(x, list) or len(x) < 3:
-        return np.nan
-    arr = np.array(x, dtype=float)
-    valid = ~np.isnan(arr)
-    if valid.sum() < 3:
-        return np.nan
-    # Keep only valid values in order, compute consecutive deltas
-    vals = arr[valid]
-    deltas = np.diff(vals)
-    if len(deltas) < 2:
-        return np.nan
-    idx = np.arange(len(deltas))
-    return linregress(idx, deltas).slope
-
-
-def _engineer_visit_agnostic(df, new_columns):
-    """Populate *new_columns* dict with visit-agnostic features for all numeric-list columns in *df*."""
-    for col in df.columns:
-        if not _is_numeric_list_col(df[col]):
-            continue
-
-        new_columns[f"{col}_mean"] = df[col].apply(
-            lambda x: np.nanmean(x) if _has_valid(x) else np.nan)
-        new_columns[f"{col}_max"] = df[col].apply(
-            lambda x: np.nanmax(x) if _has_valid(x) else np.nan)
-        new_columns[f"{col}_min"] = df[col].apply(
-            lambda x: np.nanmin(x) if _has_valid(x) else np.nan)
-        new_columns[f"{col}_std"] = df[col].apply(
-            lambda x: (np.nanstd(x, ddof=1)
-                       if isinstance(x, list) and np.sum(~np.isnan(x)) > 1
-                       else np.nan))
-        new_columns[f"{col}_range"] = df[col].apply(
-            lambda x: (np.nanmax(x) - np.nanmin(x)) if _has_valid(x) else np.nan)
-        new_columns[f"{col}_slope"] = df[col].apply(_calc_slope)
-        new_columns[f"{col}_first"] = df[col].apply(_first_valid)
-        new_columns[f"{col}_last"] = df[col].apply(_last_valid)
-        new_columns[f"{col}_last_minus_first"] = df[col].apply(
-            lambda x: (_last_valid(x) - _first_valid(x))
-            if _has_valid(x) else np.nan)
-        new_columns[f"{col}_acceleration"] = df[col].apply(_calc_acceleration)
-        new_columns[f"{col}_n_visits"] = df[col].apply(
-            lambda x: int(np.sum(~np.isnan(x))) if isinstance(x, list) else np.nan)
-
-
-def create_delta_features(df):
-    """Visit-agnostic feature engineering.
-
-    For each longitudinal (list-valued) column, creates fixed-width summary
-    statistics that are independent of the number of visits:
-
-        _mean, _max, _min, _std, _range, _slope, _first, _last,
-        _last_minus_first, _acceleration, _n_visits
-
-    Static / scalar columns are passed through unchanged.
-    """
-    df = df.copy()
-    new_columns = {}
-
-    _parse_array_columns(df)
-    _engineer_visit_agnostic(df, new_columns)
-
-    df = pd.concat([df, pd.DataFrame(new_columns)], axis=1)
-
-    # Drop original array columns (keep only engineered features)
-    array_cols = [col for col in df.columns if isinstance(df[col].iloc[0], list)] if len(df) > 0 else []
-    df = df.drop(columns=array_cols)
-    
-    return df
-
 
 def bootstrap_all_metrics_ci(
     y_true,
@@ -269,13 +128,10 @@ def bootstrap_all_metrics_ci(
     return results
 
 # Preprocess the data
-def preprocess_data(df, progression_type, mmse_only=False):
+def preprocess_data(df, progression_type):
     # Create target variable if not already present
     if 'target' not in df.columns:
-        if progression_type == 'AD':
-            df['target'] = df.apply(create_target_variable_ad, axis=1)
-        elif progression_type in ('MCI', 'CN'):
-            df['target'] = df.apply(create_target_variable_cn, axis=1)
+        df['target'] = df['Progression'].apply(create_target, progression_type=progression_type)
     
     # Get all available features (after create_delta_features transformation)
     all_features = [col for col in df.columns if col != 'target']
@@ -298,10 +154,7 @@ def preprocess_data(df, progression_type, mmse_only=False):
     static_features = [f for f in static_features if f in df.columns]
     
     # Combine all features
-    if mmse_only:
-        features = [col for col in all_features if col.startswith('MMSE_')]
-    else:
-        features = static_features + time_series_features
+    features = static_features + time_series_features
     
     # Handle missing values
     df = df[features + ['target']].copy()
@@ -319,39 +172,97 @@ def preprocess_data(df, progression_type, mmse_only=False):
     return df, None, None
 
 
+def _fit_xgb(X_tr, X_te, y_tr, params, n_jobs=None):
+    """Fit imputer/scaler/XGBoost on training data; return predictions on test data.
 
-# For the training of the best model with the best set of hyperparameters, prints out the whole performance report.
-def build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_names):
-    
-    # Fit imputer/scaler on training set only (avoid leakage)
+    Returns (model, imputer, scaler, y_pred, y_proba).
+    """
     imputer = SimpleImputer(strategy='mean')
     scaler = StandardScaler()
-    X_train_proc = scaler.fit_transform(imputer.fit_transform(X_train))
-    X_test_proc = scaler.transform(imputer.transform(X_test))
+    X_tr_proc = scaler.fit_transform(imputer.fit_transform(X_tr))
+    X_te_proc = scaler.transform(imputer.transform(X_te))
 
-    
-    n_neg = int((y_train == 0).sum())
-    n_pos = int((y_train == 1).sum())
+    n_neg = int((y_tr == 0).sum())
+    n_pos = int((y_tr == 1).sum())
     spw = n_neg / n_pos if n_pos > 0 else 1.0
 
     model = XGBClassifier(
         objective='binary:logistic',
         eval_metric='auc',
-        n_estimators=model_dict['n_estimators'],
-        max_depth=model_dict['max_depth'],
-        learning_rate=model_dict['learning_rate'],
-        subsample=model_dict['subsample'],
-        colsample_bytree=model_dict['colsample_bytree'],
+        n_estimators=params['n_estimators'],
+        max_depth=params['max_depth'],
+        learning_rate=params['learning_rate'],
+        subsample=params['subsample'],
+        colsample_bytree=params['colsample_bytree'],
         scale_pos_weight=spw,
+        n_jobs=n_jobs,
         random_state=42,
-        
     )
+    model.fit(X_tr_proc, y_tr)
+    y_proba = model.predict_proba(X_te_proc)[:, 1]
+    y_pred = model.predict(X_te_proc)
+    return model, imputer, scaler, y_pred, y_proba
 
-    model.fit(X_train_proc, y_train)
+
+def _print_bootstrap_ci(metrics):
+    """Print bootstrap 95% CI summary block to stdout."""
+    acc_pt,  (acc_lo,  acc_hi)  = metrics["accuracy"]
+    prec_pt, (prec_lo, prec_hi) = metrics["precision_macro"]
+    rec_pt,  (rec_lo,  rec_hi)  = metrics["recall_macro"]
+    f1_pt,   (f1_lo,   f1_hi)   = metrics["f1_macro"]
+    auc_pt,  (auc_lo,  auc_hi)  = metrics["auc"]
+
+    print(f"\nBootstrap 95% CI (n=1000, valid_samples={metrics['valid_samples']}):")
+    print(f"- Accuracy: {acc_pt:.3f} (CI: {acc_lo:.3f}, {acc_hi:.3f}) range={acc_hi - acc_lo:.3f}")
+    print(f"- Precision (macro): {prec_pt:.3f} (CI: {prec_lo:.3f}, {prec_hi:.3f}) range={prec_hi - prec_lo:.3f}")
+    print(f"- Recall (macro): {rec_pt:.3f} (CI: {rec_lo:.3f}, {rec_hi:.3f}) range={rec_hi - rec_lo:.3f}")
+    print(f"- F1 (macro): {f1_pt:.3f} (CI: {f1_lo:.3f}, {f1_hi:.3f}) range={f1_hi - f1_lo:.3f}")
+    if not np.isnan(auc_lo):
+        print(f"- ROC AUC: {auc_pt:.3f} (CI: {auc_lo:.3f}, {auc_hi:.3f}) range={auc_hi - auc_lo:.3f}")
+    else:
+        print(f"- ROC AUC: {auc_pt:.3f} (CI unavailable; too few valid resamples)")
+
+
+def _write_bootstrap_ci(f, bm):
+    """Write bootstrap 95% CI summary block to an open file handle."""
+    f.write(f"Bootstrap 95% CI (n=1000, valid_samples={bm['valid_samples']}):\n")
+    f.write(f"- Accuracy: {bm['accuracy'][0]:.3f} (CI: {bm['accuracy'][1][0]:.3f}, {bm['accuracy'][1][1]:.3f}) range={bm['accuracy'][1][1] - bm['accuracy'][1][0]:.3f}\n")
+    f.write(f"- Precision (macro): {bm['precision_macro'][0]:.3f} (CI: {bm['precision_macro'][1][0]:.3f}, {bm['precision_macro'][1][1]:.3f}) range={bm['precision_macro'][1][1] - bm['precision_macro'][1][0]:.3f}\n")
+    f.write(f"- Recall (macro): {bm['recall_macro'][0]:.3f} (CI: {bm['recall_macro'][1][0]:.3f}, {bm['recall_macro'][1][1]:.3f}) range={bm['recall_macro'][1][1] - bm['recall_macro'][1][0]:.3f}\n")
+    f.write(f"- F1 (macro): {bm['f1_macro'][0]:.3f} (CI: {bm['f1_macro'][1][0]:.3f}, {bm['f1_macro'][1][1]:.3f}) range={bm['f1_macro'][1][1] - bm['f1_macro'][1][0]:.3f}\n")
+    auc_lo, auc_hi = bm['auc'][1]
+    if not np.isnan(auc_lo):
+        f.write(f"- ROC AUC: {bm['auc'][0]:.3f} (CI: {auc_lo:.3f}, {auc_hi:.3f}) range={auc_hi - auc_lo:.3f}\n")
+    else:
+        f.write(f"- ROC AUC: {bm['auc'][0]:.3f} (CI unavailable; too few valid resamples)\n")
+
+
+def _run_loocv_folds(df, combo, progression_type, n_jobs, desc, tqdm_position=None):
+    """Run all LOO folds for one combo; returns list of fold result tuples."""
+    n_samples = len(df)
+    pos_kwargs = {"position": tqdm_position} if tqdm_position is not None else {}
+    if n_jobs == 1:
+        return [
+            _loocv_fold(i, df, combo, progression_type)
+            for i in tqdm(range(n_samples), desc=desc, unit="fold", leave=False, **pos_kwargs)
+        ]
+    return list(tqdm(
+        Parallel(n_jobs=n_jobs, return_as='generator')(
+            delayed(_loocv_fold)(i, df, combo, progression_type)
+            for i in range(n_samples)
+        ),
+        total=n_samples,
+        desc=desc,
+        unit="fold",
+        leave=False,
+        **pos_kwargs,
+    ))
+
+
+# For the training of the best model with the best set of hyperparameters, prints out the whole performance report.
+def build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_names):
     
-    # Evaluate model
-    y_pred = model.predict(X_test_proc)
-    y_proba = model.predict_proba(X_test_proc)[:, 1]
+    model, imputer, scaler, y_pred, y_proba = _fit_xgb(X_train, X_test, y_train, model_dict)
     
     print("Classification Report:")
     cr_str = classification_report(y_test, y_pred)
@@ -372,21 +283,7 @@ def build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_name
         verbose=True,
     )
 
-    acc_pt, (acc_lo, acc_hi) = metrics["accuracy"]
-    prec_pt, (prec_lo, prec_hi) = metrics["precision_macro"]
-    rec_pt, (rec_lo, rec_hi) = metrics["recall_macro"]
-    f1_pt, (f1_lo, f1_hi) = metrics["f1_macro"]
-    auc_pt, (auc_lo, auc_hi) = metrics["auc"]
-
-    print(f"\nBootstrap 95% CI (n=1000, valid_samples={metrics['valid_samples']}):")
-    print(f"- Accuracy: {acc_pt:.3f} (CI: {acc_lo:.3f}, {acc_hi:.3f}) range={acc_hi - acc_lo:.3f}")
-    print(f"- Precision (macro): {prec_pt:.3f} (CI: {prec_lo:.3f}, {prec_hi:.3f}) range={prec_hi - prec_lo:.3f}")
-    print(f"- Recall (macro): {rec_pt:.3f} (CI: {rec_lo:.3f}, {rec_hi:.3f}) range={rec_hi - rec_lo:.3f}")
-    print(f"- F1 (macro): {f1_pt:.3f} (CI: {f1_lo:.3f}, {f1_hi:.3f}) range={f1_hi - f1_lo:.3f}")
-    if not np.isnan(auc_lo):
-        print(f"- ROC AUC: {auc_pt:.3f} (CI: {auc_lo:.3f}, {auc_hi:.3f}) range={auc_hi - auc_lo:.3f}")
-    else:
-        print(f"- ROC AUC: {auc_pt:.3f} (CI unavailable; too few valid resamples)")
+    _print_bootstrap_ci(metrics)
 
     summary = {
         "classification_report": cr_str,
@@ -403,46 +300,15 @@ def build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_name
 # To train models for cross-validation. Returns only AUC score. Does not print out anything.
 def build_model(X_train, X_test, y_train, y_test, model_dict, feature_names, xgb_n_jobs=None):
     
-    # Per-fold imputation/scaling fit on training fold only (avoid leakage)
-    imputer = SimpleImputer(strategy='mean')
-    scaler = StandardScaler()
-    X_train_proc = scaler.fit_transform(imputer.fit_transform(X_train))
-    X_test_proc = scaler.transform(imputer.transform(X_test))
-
-    n_neg = int((y_train == 0).sum())
-    n_pos = int((y_train == 1).sum())
-    spw = n_neg / n_pos if n_pos > 0 else 1.0
-
-    model = XGBClassifier(
-        objective='binary:logistic',
-        eval_metric='auc',
-
-        n_estimators=model_dict['n_estimators'],
-        max_depth=model_dict['max_depth'],
-        learning_rate=model_dict['learning_rate'],
-        subsample=model_dict['subsample'],
-        colsample_bytree=model_dict['colsample_bytree'],
-
-        scale_pos_weight=spw,
-        n_jobs=xgb_n_jobs,
-        random_state=42,
-    )
-
-    model.fit(X_train_proc, y_train)
-    
-    # Evaluate model
-    y_proba = model.predict_proba(X_test_proc)[:, 1]
-
+    _, _, _, _, y_proba = _fit_xgb(X_train, X_test, y_train, model_dict, n_jobs=xgb_n_jobs)
     return roc_auc_score(y_test, y_proba)
 
 
-def _loocv_fold(fold_idx, df_with_target, covariates, mmse_needs_imputation,
-                hyperparams, progression_type, mmse_only=False):
+def _loocv_fold(fold_idx, df_with_target, hyperparams, progression_type):
     """Run one LOO fold from raw data through prediction.
 
-    The full pipeline (MMSE imputation -> delta features -> preprocess ->
-    impute/scale -> XGBoost) is executed so that the MMSE
-    imputer is never fit on the held-out sample.
+    The full pipeline (delta features -> preprocess -> impute/scale -> XGBoost)
+    is executed per fold.
 
     Returns (true_label, predicted_proba, predicted_class).
     """
@@ -455,11 +321,6 @@ def _loocv_fold(fold_idx, df_with_target, covariates, mmse_needs_imputation,
     df_train = df_with_target.iloc[train_idx].copy()
     df_test  = df_with_target.iloc[[fold_idx]].copy()
     true_label = int(df_test['target'].iloc[0])
-
-    # 2. MMSE imputation (fit on N-1 only)
-    if mmse_needs_imputation:
-        mmse_imp, df_train = fit_mmse_imputer(df_train, covariates)
-        df_test = transform_mmse(df_test, covariates, mmse_imp)
 
     # 3. Separate targets, drop from DataFrames
     y_tr = df_train['target'].values
@@ -474,8 +335,8 @@ def _loocv_fold(fold_idx, df_with_target, covariates, mmse_needs_imputation,
     # 5. Re-attach targets for preprocess_data
     df_train['target'] = y_tr
     df_test['target']  = y_te_val
-    processed_train, _, _ = preprocess_data(df_train, progression_type, mmse_only=mmse_only)
-    processed_test,  _, _ = preprocess_data(df_test, progression_type, mmse_only=mmse_only)
+    processed_train, _, _ = preprocess_data(df_train, progression_type)
+    processed_test,  _, _ = preprocess_data(df_test, progression_type)
 
     # 6. Align columns (test may lack some delta columns present in train)
     feat_names = [c for c in processed_train.columns if c != 'target']
@@ -488,34 +349,20 @@ def _loocv_fold(fold_idx, df_with_target, covariates, mmse_needs_imputation,
     X_te = processed_test.drop(columns=['target']).values
     y_tr = processed_train['target'].values
 
-    # 7. Impute + scale
-    imp = SimpleImputer(strategy='mean')
-    scl = StandardScaler()
-    X_tr = scl.fit_transform(imp.fit_transform(X_tr))
-    X_te = scl.transform(imp.transform(X_te))
-
-    # 9. Train + predict
-    n_neg = int((y_tr == 0).sum())
-    n_pos = int((y_tr == 1).sum())
-    spw = n_neg / n_pos if n_pos > 0 else 1.0
-
-    clf = XGBClassifier(
-        objective='binary:logistic', eval_metric='auc',
-        n_estimators=n_est, max_depth=max_depth, learning_rate=lr,
-        subsample=subsample, colsample_bytree=colsample,
-        scale_pos_weight=spw,
-        n_jobs=1, random_state=42,
-    )
-    clf.fit(X_tr, y_tr)
-    proba = float(clf.predict_proba(X_te)[:, 1][0])
-    pred  = int(clf.predict(X_te)[0])
+    # 7. Train + predict
+    params = {
+        'n_estimators': n_est, 'max_depth': max_depth, 'learning_rate': lr,
+        'subsample': subsample, 'colsample_bytree': colsample,
+    }
+    clf, _, _, y_pred_arr, y_proba_arr = _fit_xgb(X_tr, X_te, y_tr, params, n_jobs=1)
+    proba = float(y_proba_arr[0])
+    pred  = int(y_pred_arr[0])
 
     return (true_label, proba, pred, feat_names, clf.feature_importances_)
 
 
-def _eval_loocv_combo_pipeline(combo, df_with_target, covariates,
-                                mmse_needs_imputation, progression_type,
-                                n_jobs_folds=1, mmse_only=False, combo_label=None):
+def _eval_loocv_combo_pipeline(combo, df_with_target, progression_type,
+                                n_jobs_folds=1, combo_label=None):
     """Evaluate one hyperparameter combo across all LOO folds (full pipeline per fold).
     Returns result tuple: (n_est, max_depth, lr, subsample, colsample, auc_score).
 
@@ -528,33 +375,9 @@ def _eval_loocv_combo_pipeline(combo, df_with_target, covariates,
         Optional label for the tqdm fold progress bar (e.g. '3/36').
     """
     warnings.filterwarnings('ignore')
-    n_samples = len(df_with_target)
     fold_desc = f"Folds ({combo_label})" if combo_label else "Folds"
-    if n_jobs_folds == 1:
-        results = [
-            _loocv_fold(
-                i, df_with_target, covariates, mmse_needs_imputation,
-                combo, progression_type,
-                mmse_only=mmse_only,
-            )
-            for i in tqdm(range(n_samples), desc=fold_desc, unit="fold", leave=False, position=1)
-        ]
-    else:
-        results = list(tqdm(
-            Parallel(n_jobs=n_jobs_folds, return_as='generator')(
-                delayed(_loocv_fold)(
-                    i, df_with_target, covariates, mmse_needs_imputation,
-                    combo, progression_type,
-                    mmse_only=mmse_only,
-                )
-                for i in range(n_samples)
-            ),
-            total=n_samples,
-            desc=fold_desc,
-            unit="fold",
-            leave=False,
-            position=1,
-        ))
+    results = _run_loocv_folds(df_with_target, combo, progression_type,
+                               n_jobs=n_jobs_folds, desc=fold_desc, tqdm_position=1)
     y_true  = np.array([r[0] for r in results])
     y_score = np.array([r[1] for r in results])
     try:
@@ -564,9 +387,8 @@ def _eval_loocv_combo_pipeline(combo, df_with_target, covariates,
     return (*combo, score)
 
 
-def _loocv_final_evaluation(df_with_target, best_params, covariates,
-                             mmse_needs_imputation, progression_type,
-                             n_jobs=1, mmse_only=False):
+def _loocv_final_evaluation(df_with_target, best_params, progression_type,
+                             n_jobs=1):
     """Re-run LOOCV with best hyperparameters; print full report with bootstrap CIs.
     Returns a summary dict compatible with the report writer in train_best_model.
 
@@ -578,31 +400,10 @@ def _loocv_final_evaluation(df_with_target, best_params, covariates,
              best_params['colsample_bytree'])
     n_samples = len(df_with_target)
 
-    if n_jobs == 1:
-        results = []
-        for i in tqdm(range(n_samples), desc="LOOCV final evaluation", unit="fold"):
-            results.append(_loocv_fold(
-                i, df_with_target, covariates, mmse_needs_imputation,
-                combo, progression_type,
-                mmse_only=mmse_only,
-            ))
-    else:
+    if n_jobs != 1:
         print(f"Running LOOCV final evaluation in parallel (n_jobs={n_jobs}, {n_samples} folds)...")
-        # Wrap the *result* generator with tqdm so the bar advances as folds complete,
-        # not as tasks are dispatched (which would rush to 100% immediately).
-        results = list(tqdm(
-            Parallel(n_jobs=n_jobs, return_as='generator')(
-                delayed(_loocv_fold)(
-                    i, df_with_target, covariates, mmse_needs_imputation,
-                    combo, progression_type,
-                    mmse_only=mmse_only,
-                )
-                for i in range(n_samples)
-            ),
-            total=n_samples,
-            desc="LOOCV final evaluation",
-            unit="fold",
-        ))
+    results = _run_loocv_folds(df_with_target, combo, progression_type,
+                               n_jobs=n_jobs, desc="LOOCV final evaluation")
 
     y_true  = np.array([r[0] for r in results])
     y_proba = np.array([r[1] for r in results])
@@ -622,21 +423,7 @@ def _loocv_final_evaluation(df_with_target, best_params, covariates,
         y_true, y_pred, y_proba,
         n_boot=1000, conf_level=0.95, random_state=42, verbose=True,
     )
-    acc_pt,  (acc_lo,  acc_hi)  = metrics["accuracy"]
-    prec_pt, (prec_lo, prec_hi) = metrics["precision_macro"]
-    rec_pt,  (rec_lo,  rec_hi)  = metrics["recall_macro"]
-    f1_pt,   (f1_lo,   f1_hi)   = metrics["f1_macro"]
-    auc_pt,  (auc_lo,  auc_hi)  = metrics["auc"]
-
-    print(f"\nBootstrap 95% CI (n=1000, valid_samples={metrics['valid_samples']}):")
-    print(f"- Accuracy: {acc_pt:.3f} (CI: {acc_lo:.3f}, {acc_hi:.3f}) range={acc_hi - acc_lo:.3f}")
-    print(f"- Precision (macro): {prec_pt:.3f} (CI: {prec_lo:.3f}, {prec_hi:.3f}) range={prec_hi - prec_lo:.3f}")
-    print(f"- Recall (macro): {rec_pt:.3f} (CI: {rec_lo:.3f}, {rec_hi:.3f}) range={rec_hi - rec_lo:.3f}")
-    print(f"- F1 (macro): {f1_pt:.3f} (CI: {f1_lo:.3f}, {f1_hi:.3f}) range={f1_hi - f1_lo:.3f}")
-    if not np.isnan(auc_lo):
-        print(f"- ROC AUC: {auc_pt:.3f} (CI: {auc_lo:.3f}, {auc_hi:.3f}) range={auc_hi - auc_lo:.3f}")
-    else:
-        print(f"- ROC AUC: {auc_pt:.3f} (CI unavailable; too few valid resamples)")
+    _print_bootstrap_ci(metrics)
 
     # Aggregate feature importances across folds
     feat_names = results[0][3]
@@ -692,8 +479,8 @@ def _eval_skf_combo(combo, list_x_train, list_x_test, list_y_train, list_y_test,
 # n_jobs_folds : (LOOCV only) parallel workers for LOO folds within each grid-search combo and
 #                the final LOOCV evaluation. 1 = serial (default). -1 = all CPUs.
 def grid_search(x, y, param_grid, csv_path, feature_names, cv_method='skf', n_jobs=1,
-                df_raw=None, covariates=None, mmse_needs_imputation=False, progression_type=None,
-                n_jobs_folds=1, mmse_only=False):
+                df_raw=None, progression_type=None,
+                n_jobs_folds=1):
     best_hyperparameters = None
     best_score = 0
 
@@ -716,8 +503,8 @@ def grid_search(x, y, param_grid, csv_path, feature_names, cv_method='skf', n_jo
                 for idx, combo in enumerate(all_combos):
                     combo_label = f"{idx+1}/{total_combos}"
                     result = _eval_loocv_combo_pipeline(
-                        combo, df_raw, covariates, mmse_needs_imputation, progression_type,
-                        n_jobs_folds=n_jobs_folds, mmse_only=mmse_only,
+                        combo, df_raw, progression_type,
+                        n_jobs_folds=n_jobs_folds,
                         combo_label=combo_label,
                     )
                     scores.append(list(result))
@@ -730,8 +517,8 @@ def grid_search(x, y, param_grid, csv_path, feature_names, cv_method='skf', n_jo
             # to 1 worker, so n_jobs_folds is forced serial here.
             results = Parallel(n_jobs=n_jobs, return_as='generator')(
                 delayed(_eval_loocv_combo_pipeline)(
-                    combo, df_raw, covariates, mmse_needs_imputation, progression_type,
-                    n_jobs_folds=1, mmse_only=mmse_only,
+                    combo, df_raw, progression_type,
+                    n_jobs_folds=1,
                 )
                 for combo in all_combos
             )
@@ -804,22 +591,12 @@ def grid_search(x, y, param_grid, csv_path, feature_names, cv_method='skf', n_jo
 #                the final LOOCV evaluation. 1 = serial (default). -1 = all CPUs.
 #                Combine with n_jobs=1 for fold-level-only parallelism (recommended), or
 #                leave at 1 and set n_jobs > 1 for combo-level-only parallelism.
-def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="saved_models", model_base_name=None, save_artifacts=True, cv_method='skf', n_jobs=1, n_jobs_folds=1, mmse_only=False):
+def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="saved_models", model_base_name=None, save_artifacts=True, cv_method='skf', n_jobs=1, n_jobs_folds=1):
     
     dataset = dataset.copy()
 
     # --- Step 1: Create target variable on the raw DataFrame (needed for stratified split) ---
-    if progression_type == 'AD':
-        dataset['target'] = dataset.apply(create_target_variable_ad, axis=1)
-    elif progression_type in ('MCI', 'CN'):
-        dataset['target'] = dataset.apply(create_target_variable_cn, axis=1)
-
-    # Determine MMSE imputation needs early (shared by all modes)
-    covariates = [c for c in MMSE_COVARIATES if c in dataset.columns]
-    mmse_needs_imputation = (
-        'MMSE' in dataset.columns
-        and dataset['MMSE'].astype(str).str.contains('nan', na=False).any()
-    )
+    dataset['target'] = dataset['Progression'].apply(create_target, progression_type=progression_type)
 
     # ══════════════════════════════════════════════════════════════════════════
     #  LOOCV mode (no train/test split)
@@ -827,27 +604,24 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
     if cv_method == 'loocv':
         print(f"\n{'='*60}")
         print(f"LOOCV — full dataset ({len(dataset)} samples)")
-        print(f"MMSE imputation: {'per-fold (fit on N-1)' if mmse_needs_imputation else 'not needed'}")
         print(f"{'='*60}")
 
         # Suppress noisy warnings (convergence, deprecation, etc.) during grid search
         warnings.filterwarnings('ignore')
 
-        # Grid search with per-fold pipeline (MMSE imputed inside each LOO fold)
         model_dict = grid_search(
             None, None, param_grid, csv_path, None,
             cv_method='loocv', n_jobs=n_jobs,
-            df_raw=dataset, covariates=covariates,
-            mmse_needs_imputation=mmse_needs_imputation,
+            df_raw=dataset,
             progression_type=progression_type,
-            n_jobs_folds=n_jobs_folds, mmse_only=mmse_only,
+            n_jobs_folds=n_jobs_folds,
         )
 
         # Final evaluation: re-run LOOCV with best hyperparameters
         summary = _loocv_final_evaluation(
-            dataset, model_dict, covariates, mmse_needs_imputation,
+            dataset, model_dict,
             progression_type=progression_type,
-            n_jobs=n_jobs_folds, mmse_only=mmse_only,
+            n_jobs=n_jobs_folds,
         )
 
         # Save report only (LOOCV produces N models; no single model to persist)
@@ -859,7 +633,6 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
                 f.write(f"Dataset base: {base}\n")
                 f.write(f"Progression type: {progression_type}\n")
                 f.write(f"CV method: loocv (no train/test split)\n")
-                f.write(f"MMSE imputation: {'per-fold (fit on N-1)' if mmse_needs_imputation else 'not needed'}\n")
                 f.write(f"Total samples: {len(dataset)}\n")
                 f.write("\nBest hyperparameters:\n")
                 for k, v in summary['best_params'].items():
@@ -868,16 +641,7 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
                 f.write(summary["classification_report"] + "\n")
                 f.write(f"\nBase ROC AUC: {summary['base_auc']:.4f}\n")
                 bm = summary["bootstrap_metrics"]
-                f.write(f"Bootstrap 95% CI (n=1000, valid_samples={bm['valid_samples']}):\n")
-                f.write(f"- Accuracy: {bm['accuracy'][0]:.3f} (CI: {bm['accuracy'][1][0]:.3f}, {bm['accuracy'][1][1]:.3f}) range={bm['accuracy'][1][1] - bm['accuracy'][1][0]:.3f}\n")
-                f.write(f"- Precision (macro): {bm['precision_macro'][0]:.3f} (CI: {bm['precision_macro'][1][0]:.3f}, {bm['precision_macro'][1][1]:.3f}) range={bm['precision_macro'][1][1] - bm['precision_macro'][1][0]:.3f}\n")
-                f.write(f"- Recall (macro): {bm['recall_macro'][0]:.3f} (CI: {bm['recall_macro'][1][0]:.3f}, {bm['recall_macro'][1][1]:.3f}) range={bm['recall_macro'][1][1] - bm['recall_macro'][1][0]:.3f}\n")
-                f.write(f"- F1 (macro): {bm['f1_macro'][0]:.3f} (CI: {bm['f1_macro'][1][0]:.3f}, {bm['f1_macro'][1][1]:.3f}) range={bm['f1_macro'][1][1] - bm['f1_macro'][1][0]:.3f}\n")
-                auc_lo, auc_hi = bm['auc'][1]
-                if not np.isnan(auc_lo):
-                    f.write(f"- ROC AUC: {bm['auc'][0]:.3f} (CI: {auc_lo:.3f}, {auc_hi:.3f}) range={auc_hi - auc_lo:.3f}\n")
-                else:
-                    f.write(f"- ROC AUC: {bm['auc'][0]:.3f} (CI unavailable; too few valid resamples)\n")
+                _write_bootstrap_ci(f, bm)
             print(f"\nSaved report: {report_path}")
 
         return None, None  # No single model in Mode A
@@ -893,16 +657,6 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
         df_train_raw = dataset.loc[train_idx].copy()
         df_test_raw = dataset.loc[test_idx].copy()
 
-        # --- Step 3: MMSE imputation post-split (fit on train only) ---
-        mmse_imputer_obj = None
-        if mmse_needs_imputation:
-            print(f"Fitting MMSE imputer on training set ({len(df_train_raw)} samples) with {len(covariates)} covariates...")
-            mmse_imputer_obj, df_train_raw = fit_mmse_imputer(df_train_raw, covariates)
-            df_test_raw = transform_mmse(df_test_raw, covariates, mmse_imputer_obj)
-            print("MMSE imputation complete (train fit, test transformed).")
-        else:
-            print("No MMSE NaN values found; skipping MMSE imputation.")
-
         # --- Step 4: Feature engineering + preprocessing on each split independently ---
         y_train_target = df_train_raw['target'].values
         y_test_target = df_test_raw['target'].values
@@ -915,8 +669,8 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
         df_train_feat['target'] = y_train_target
         df_test_feat['target'] = y_test_target
 
-        processed_train, _, _ = preprocess_data(df_train_feat, progression_type, mmse_only=mmse_only)
-        processed_test, _, _ = preprocess_data(df_test_feat, progression_type, mmse_only=mmse_only)
+        processed_train, _, _ = preprocess_data(df_train_feat, progression_type)
+        processed_test, _, _ = preprocess_data(df_test_feat, progression_type)
 
         feature_names = [c for c in processed_train.columns if c != 'target']
         for col in feature_names:
@@ -930,7 +684,7 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
         y_test = processed_test['target'].values
 
         # --- Step 5: Grid search ---
-        model_dict = grid_search(X_train, y_train, param_grid, csv_path, feature_names, cv_method=cv_method, n_jobs=n_jobs, mmse_only=mmse_only)
+        model_dict = grid_search(X_train, y_train, param_grid, csv_path, feature_names, cv_method=cv_method, n_jobs=n_jobs)
 
         # --- Step 6: Final model with full report ---
         model, columns, imputer, scaler, summary = build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_names)
@@ -956,16 +710,10 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
             print(f"- Scaler:  {scaler_path}")
             print(f"- Imputer: {imputer_path}")
 
-            if mmse_imputer_obj is not None:
-                mmse_imp_path = os.path.join(save_dir, f"{base}_mmse_imputer_{progression_type}.pkl")
-                joblib.dump(mmse_imputer_obj, mmse_imp_path)
-                print(f"- MMSE Imputer: {mmse_imp_path}")
-
             report_path = os.path.join(save_dir, f"{base}_report_{progression_type}.txt")
             with open(report_path, "w") as f:
                 f.write(f"Dataset base: {base}\n")
                 f.write(f"Progression type: {progression_type}\n")
-                f.write(f"MMSE imputation: {'post-split (train-fit)' if mmse_imputer_obj else 'not needed'}\n")
                 f.write(f"CV method: {cv_method}\n")
                 f.write("Best hyperparameters:\n")
                 for k, v in model.get_params().items():
@@ -975,16 +723,7 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
                 f.write(summary["classification_report"] + "\n")
                 f.write(f"\nBase ROC AUC: {summary['base_auc']:.4f}\n")
                 bm = summary["bootstrap_metrics"]
-                f.write(f"Bootstrap 95% CI (n=1000, valid_samples={bm['valid_samples']}):\n")
-                f.write(f"- Accuracy: {bm['accuracy'][0]:.3f} (CI: {bm['accuracy'][1][0]:.3f}, {bm['accuracy'][1][1]:.3f}) range={bm['accuracy'][1][1] - bm['accuracy'][1][0]:.3f}\n")
-                f.write(f"- Precision (macro): {bm['precision_macro'][0]:.3f} (CI: {bm['precision_macro'][1][0]:.3f}, {bm['precision_macro'][1][1]:.3f}) range={bm['precision_macro'][1][1] - bm['precision_macro'][1][0]:.3f}\n")
-                f.write(f"- Recall (macro): {bm['recall_macro'][0]:.3f} (CI: {bm['recall_macro'][1][0]:.3f}, {bm['recall_macro'][1][1]:.3f}) range={bm['recall_macro'][1][1] - bm['recall_macro'][1][0]:.3f}\n")
-                f.write(f"- F1 (macro): {bm['f1_macro'][0]:.3f} (CI: {bm['f1_macro'][1][0]:.3f}, {bm['f1_macro'][1][1]:.3f}) range={bm['f1_macro'][1][1] - bm['f1_macro'][1][0]:.3f}\n")
-                auc_lo, auc_hi = bm['auc'][1]
-                if not np.isnan(auc_lo):
-                    f.write(f"- ROC AUC: {bm['auc'][0]:.3f} (CI: {auc_lo:.3f}, {auc_hi:.3f}) range={auc_hi - auc_lo:.3f}\n")
-                else:
-                    f.write(f"- ROC AUC: {bm['auc'][0]:.3f} (CI unavailable; too few valid resamples)\n")
+                _write_bootstrap_ci(f, bm)
             print(f"- Report:  {report_path}")
 
         return model, columns
