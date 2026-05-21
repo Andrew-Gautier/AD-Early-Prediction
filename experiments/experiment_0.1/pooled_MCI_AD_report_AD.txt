@@ -1,0 +1,31 @@
+Dataset base: pooled_MCI_AD
+Progression type: AD
+CV method: skf
+Best hyperparameters:
+  objective: binary:logistic
+  colsample_bytree: 0.6
+  eval_metric: auc
+  learning_rate: 0.05
+  max_depth: 3
+  n_estimators: 300
+  random_state: 42
+  subsample: 0.6
+
+Classification Report:
+              precision    recall  f1-score   support
+
+           0       0.79      0.81      0.80       280
+           1       0.82      0.80      0.81       299
+
+    accuracy                           0.80       579
+   macro avg       0.80      0.81      0.80       579
+weighted avg       0.81      0.80      0.80       579
+
+
+Base ROC AUC: 0.8811
+Bootstrap 95% CI (n=1000, valid_samples=1000/1000):
+- Accuracy: 0.805 (CI: 0.774, 0.838) range=0.064
+- Precision (macro): 0.805 (CI: 0.774, 0.837) range=0.063
+- Recall (macro): 0.805 (CI: 0.774, 0.837) range=0.064
+- F1 (macro): 0.805 (CI: 0.774, 0.837) range=0.064
+- ROC AUC: 0.881 (CI: 0.852, 0.908) range=0.056

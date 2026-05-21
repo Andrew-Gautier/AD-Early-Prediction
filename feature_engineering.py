@@ -42,11 +42,16 @@ def preprocess_data(df, progression_type):
                     '_n_visits', '_pct_change', '_std_slope',
                     '_lag1', '_lag2', '_lag3',
                     '_interval_mean', '_interval_std')
-    time_series_features = [col for col in all_features if any(s in col for s in _TS_SUFFIXES)]
 
     # Hearing × Vision interaction features (named explicitly — not reliably caught by suffixes)
     _INTERACTION_FEATURES = ['hearing_vision_product', 'hearing_vision_sum', 'hearing_vision_mean']
     interaction_features = [f for f in _INTERACTION_FEATURES if f in df.columns]
+
+    # Exclude interaction features from the suffix scan to avoid duplicates
+    # (e.g. 'hearing_vision_mean' matches '_mean' but is already in interaction_features)
+    time_series_features = [col for col in all_features
+                            if any(s in col for s in _TS_SUFFIXES)
+                            and col not in _INTERACTION_FEATURES]
 
     # Only keep features that actually exist in the dataframe
     static_features = [f for f in static_features if f in df.columns]

@@ -1,0 +1,31 @@
+Dataset base: pooled_CN
+Progression type: CN
+CV method: skf
+Best hyperparameters:
+  objective: binary:logistic
+  colsample_bytree: 0.8
+  eval_metric: auc
+  learning_rate: 0.05
+  max_depth: 3
+  n_estimators: 100
+  random_state: 42
+  subsample: 0.6
+
+Classification Report:
+              precision    recall  f1-score   support
+
+           0       0.97      0.90      0.93      1984
+           1       0.66      0.88      0.75       435
+
+    accuracy                           0.90      2419
+   macro avg       0.82      0.89      0.84      2419
+weighted avg       0.92      0.90      0.90      2419
+
+
+Base ROC AUC: 0.9408
+Bootstrap 95% CI (n=1000, valid_samples=1000/1000):
+- Accuracy: 0.897 (CI: 0.885, 0.909) range=0.023
+- Precision (macro): 0.816 (CI: 0.796, 0.835) range=0.038
+- Recall (macro): 0.889 (CI: 0.872, 0.905) range=0.032
+- F1 (macro): 0.844 (CI: 0.827, 0.861) range=0.034
+- ROC AUC: 0.941 (CI: 0.926, 0.954) range=0.028
