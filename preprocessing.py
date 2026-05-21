@@ -583,18 +583,6 @@ def _impute_bmi(values):
             return [round(avg, 1) if pd.isna(x) else round(x, 1) for x in values]
     return values
 
-def _split_mci_ad_np(df):
-    """Split out MCI/AD non-progressors (only label 1 throughout) for special MMSE rules."""
-    np_idx = []
-    for i, (_, r) in enumerate(df.iterrows()):
-        prog = r['Progression']
-        if isinstance(prog, str):
-            prog = eval(prog)
-        if 0 not in prog and 2 not in prog:
-            np_idx.append(i)
-    df_np = df.iloc[np_idx]
-    df_rest = df.drop(df.index[np_idx])
-    return df_rest, df_np
 
 def _get_progression(row):
     """Safely parse the Progression column."""

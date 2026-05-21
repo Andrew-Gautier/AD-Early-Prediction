@@ -22,40 +22,21 @@ import itertools
 import warnings
 import joblib
 from joblib import Parallel, delayed
-from imblearn.over_sampling import SMOTENC
 try:
     from tqdm import tqdm
 except ImportError:
     def tqdm(iterable, **kwargs):
         return iterable
-from preprocessing import fit_mmse_imputer, transform_mmse
+from preprocessing import fit_mmse_imputer, transform_mmse, _LONG_COLS, _SCALAR_COLS
+
+XGBOOST_PARAMS = []
 
 # Covariates used for MMSE iterative imputation (must be present in the raw DataFrame)
 MMSE_COVARIATES = ['EDUC', 'GDS', 'CDR', 'TOBAC30', 'BILLS', 'TAXES', 'SHOPPING',
                    'GAMES', 'STOVE', 'MEALPREP', 'EVENTS', 'PAYATTN', 'REMDATES',
                    'TRAVEL', 'hearing', 'vision']
 
-# Categorical feature names used for SMOTENC and encoding
-CATEGORICAL_COLS = ['SEX', 'NACCFAM', 'CVHATT', 'CVAFIB', 'DIABETES',
-                    'HYPERCHO', 'HYPERTEN', 'B12DEF', 'DEPD', 'ANX', 'NACCTBI', 'RACE']
 
-def _get_cat_indices(feature_names):
-    """Return column indices of categorical features within the feature array."""
-    return [i for i, f in enumerate(feature_names) if f in CATEGORICAL_COLS]
-
-def _apply_smotenc(X_train, y_train, cat_indices, k_neighbors=3):
-    """Apply SMOTENC to oversample the minority class in the training set.
-    Returns (X_resampled, y_resampled). Falls back to original data if SMOTE fails."""
-    try:
-        min_class_count = int(np.bincount(y_train.astype(int)).min())
-        k = min(k_neighbors, min_class_count - 1) if min_class_count > 1 else 1
-        #print(f"Applying SMOTENC with k_neighbors={k} (min class count: {min_class_count})...")
-        sm = SMOTENC(categorical_features=cat_indices, k_neighbors=k, random_state=42)
-        X_res, y_res = sm.fit_resample(X_train, y_train)
-        return X_res, y_res
-    except Exception as e:
-        print(f"  SMOTENC failed ({e}); using original training data.")
-        return X_train, y_train
 
 # This is the classifer used for visits 2-6 classification scores and charts. 
 
@@ -186,46 +167,6 @@ def create_delta_features(df):
     
     return df
 
-def safe_auc_ci(y_true, y_score, *, n_boot=1000, conf_level=0.95, min_valid=30, random_state=42, verbose=True):
-    """Bootstrap 95% CI for full ROC AUC.
-
-    Skips resamples missing a class. Prints how many were skipped if verbose.
-    Returns (base_auc, (lower_ci, upper_ci)); CI is (nan, nan) if insufficient valid resamples.
-    """
-    rng = np.random.default_rng(random_state)
-    y_true = np.asarray(y_true)
-    y_score = np.asarray(y_score)
-    if len(np.unique(y_true)) < 2:
-        if verbose:
-            print("Bootstrap AUC CI: original sample lacks both classes; skipping.")
-        return np.nan, (np.nan, np.nan)
-    base_auc = roc_auc_score(y_true, y_score)
-    kept = []
-    skipped = 0
-    n = len(y_true)
-    alpha = 1 - conf_level
-    for _ in range(n_boot):
-        idx = rng.choice(n, n, replace=True)
-        bt_y = y_true[idx]
-        if len(np.unique(bt_y)) < 2:
-            skipped += 1
-            continue
-        bt_s = y_score[idx]
-        try:
-            kept.append(roc_auc_score(bt_y, bt_s))
-        except ValueError:
-            skipped += 1
-            continue
-    if verbose:
-        print(f"Bootstrap samples: attempted={n_boot}, valid={len(kept)}, skipped={skipped}")
-    if len(kept) < min_valid:
-        if verbose:
-            print(f"Insufficient valid bootstrap samples (<{min_valid}) for CI; returning point estimate only.")
-        return base_auc, (np.nan, np.nan)
-    kept_arr = np.array(kept)
-    lower = np.percentile(kept_arr, 100 * (alpha / 2))
-    upper = np.percentile(kept_arr, 100 * (1 - alpha / 2))
-    return base_auc, (lower, upper)
 
 def bootstrap_all_metrics_ci(
     y_true,
@@ -378,59 +319,9 @@ def preprocess_data(df, progression_type, mmse_only=False):
     return df, None, None
 
 
-def aggregate_original_features(df):
-    """Aggregate time-series features using mean and combine with static features"""
-    df = df.copy()
-    
-    # Parse array strings into lists
-    for col in df.columns:
-        if df[col].dtype == object and df[col].str.startswith('[').any():
-            df[col] = df[col].apply(
-                lambda x: [float(v.strip()) if v.strip() != 'nan' else np.nan 
-                         for v in x.replace('[','').replace(']','').split(',')] 
-                if isinstance(x, str) and x.startswith('[') else np.nan
-            )
-    
-    # Aggregate time-series features using mean
-    aggregated_features = {}
-    time_series_cols = [col for col in df.columns if isinstance(df[col].iloc[0], list)]
-    
-    for col in time_series_cols:
-        aggregated_features[col] = df[col].apply(
-            lambda x: np.nanmean(x) if isinstance(x, list) else np.nan
-        )
-    
-    # Static features (non-time-series)
-    static_features = [
-        'SEX', 'EDUC', 'ALCOHOL', 'NACCFAM', 'CVHATT', 
-        'CVAFIB', 'DIABETES', 'HYPERCHO', 'HYPERTEN', 'B12DEF', 'DEPD', 
-        'ANX', 'NACCTBI', 'SMOKYRS', 'RACE', 'age'
-    ]
-    static_features = [f for f in static_features if f in df.columns]
-    
-    # Combine aggregated features with static features
-    aggregated_df = pd.DataFrame(aggregated_features)
-    static_df = df[static_features]
-    combined_df = pd.concat([static_df, aggregated_df], axis=1)
-    
-    return combined_df
-
-def split_dataset(data):
-    """Split dataset into training and testing sets. For only the training set, recalculate all scalers and imputers."""
-    # Separate features and target
-    X = data.drop('target', axis=1)
-    y = data['target']
-
-    # Split data into train and test sets
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
-    )
-
-    # Return raw splits; scaling/imputation will be fit on train only downstream
-    return X_train.values, X_test.values, y_train.values, y_test.values
 
 # For the training of the best model with the best set of hyperparameters, prints out the whole performance report.
-def build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_names, use_smote=True, k_neighbors=3):
+def build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_names):
     
     # Fit imputer/scaler on training set only (avoid leakage)
     imputer = SimpleImputer(strategy='mean')
@@ -438,34 +329,25 @@ def build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_name
     X_train_proc = scaler.fit_transform(imputer.fit_transform(X_train))
     X_test_proc = scaler.transform(imputer.transform(X_test))
 
-    # Optionally apply SMOTENC on processed training data to handle class imbalance
-    if use_smote:
-        cat_indices = _get_cat_indices(feature_names)
-        X_train_res, y_train_res = _apply_smotenc(X_train_proc, y_train, cat_indices, k_neighbors=k_neighbors)
-        print(f"SMOTE resampling: {len(y_train)} -> {len(y_train_res)} training samples. k_neighbors={k_neighbors}")
-        spw = 1.0
-    else:
-        X_train_res, y_train_res = X_train_proc, y_train
-        n_neg = int((y_train == 0).sum())
-        n_pos = int((y_train == 1).sum())
-        spw = n_neg / n_pos if n_pos > 0 else 1.0
-        print(f"SMOTE disabled: using {len(y_train)} training samples as-is (scale_pos_weight={spw:.2f})")
+    
+    n_neg = int((y_train == 0).sum())
+    n_pos = int((y_train == 1).sum())
+    spw = n_neg / n_pos if n_pos > 0 else 1.0
 
     model = XGBClassifier(
         objective='binary:logistic',
         eval_metric='auc',
-
         n_estimators=model_dict['n_estimators'],
         max_depth=model_dict['max_depth'],
         learning_rate=model_dict['learning_rate'],
         subsample=model_dict['subsample'],
         colsample_bytree=model_dict['colsample_bytree'],
-
         scale_pos_weight=spw,
         random_state=42,
+        
     )
 
-    model.fit(X_train_res, y_train_res)
+    model.fit(X_train_proc, y_train)
     
     # Evaluate model
     y_pred = model.predict(X_test_proc)
@@ -519,7 +401,7 @@ def build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_name
     return model, feature_names, imputer, scaler, summary
 
 # To train models for cross-validation. Returns only AUC score. Does not print out anything.
-def build_model(X_train, X_test, y_train, y_test, model_dict, feature_names, use_smote=True, xgb_n_jobs=None, k_neighbors=3):
+def build_model(X_train, X_test, y_train, y_test, model_dict, feature_names, xgb_n_jobs=None):
     
     # Per-fold imputation/scaling fit on training fold only (avoid leakage)
     imputer = SimpleImputer(strategy='mean')
@@ -527,16 +409,9 @@ def build_model(X_train, X_test, y_train, y_test, model_dict, feature_names, use
     X_train_proc = scaler.fit_transform(imputer.fit_transform(X_train))
     X_test_proc = scaler.transform(imputer.transform(X_test))
 
-    # Optionally apply SMOTENC on processed training fold to handle class imbalance
-    if use_smote:
-        cat_indices = _get_cat_indices(feature_names)
-        X_train_res, y_train_res = _apply_smotenc(X_train_proc, y_train, cat_indices, k_neighbors=k_neighbors)
-        spw = 1.0
-    else:
-        X_train_res, y_train_res = X_train_proc, y_train
-        n_neg = int((y_train == 0).sum())
-        n_pos = int((y_train == 1).sum())
-        spw = n_neg / n_pos if n_pos > 0 else 1.0
+    n_neg = int((y_train == 0).sum())
+    n_pos = int((y_train == 1).sum())
+    spw = n_neg / n_pos if n_pos > 0 else 1.0
 
     model = XGBClassifier(
         objective='binary:logistic',
@@ -553,7 +428,7 @@ def build_model(X_train, X_test, y_train, y_test, model_dict, feature_names, use
         random_state=42,
     )
 
-    model.fit(X_train_res, y_train_res)
+    model.fit(X_train_proc, y_train)
     
     # Evaluate model
     y_proba = model.predict_proba(X_test_proc)[:, 1]
@@ -562,11 +437,11 @@ def build_model(X_train, X_test, y_train, y_test, model_dict, feature_names, use
 
 
 def _loocv_fold(fold_idx, df_with_target, covariates, mmse_needs_imputation,
-                hyperparams, use_smote, progression_type, k_neighbors=3, mmse_only=False):
+                hyperparams, progression_type, mmse_only=False):
     """Run one LOO fold from raw data through prediction.
 
     The full pipeline (MMSE imputation -> delta features -> preprocess ->
-    impute/scale -> optional SMOTE -> XGBoost) is executed so that the MMSE
+    impute/scale -> XGBoost) is executed so that the MMSE
     imputer is never fit on the held-out sample.
 
     Returns (true_label, predicted_proba, predicted_class).
@@ -619,21 +494,10 @@ def _loocv_fold(fold_idx, df_with_target, covariates, mmse_needs_imputation,
     X_tr = scl.fit_transform(imp.fit_transform(X_tr))
     X_te = scl.transform(imp.transform(X_te))
 
-    # 8. Optional SMOTE
-    if use_smote:
-        cat_idx = _get_cat_indices(feat_names)
-        X_tr, y_tr = _apply_smotenc(X_tr, y_tr, cat_idx, k_neighbors=k_neighbors)
-
     # 9. Train + predict
-    # When SMOTE is disabled (Mode A), compute scale_pos_weight from the N-1
-    # training labels to up-weight the minority class inside XGBoost's loss.
-    # Computed per fold from y_tr only — no leakage from the held-out sample.
-    if not use_smote:
-        n_neg = int((y_tr == 0).sum())
-        n_pos = int((y_tr == 1).sum())
-        spw = n_neg / n_pos if n_pos > 0 else 1.0
-    else:
-        spw = 1.0
+    n_neg = int((y_tr == 0).sum())
+    n_pos = int((y_tr == 1).sum())
+    spw = n_neg / n_pos if n_pos > 0 else 1.0
 
     clf = XGBClassifier(
         objective='binary:logistic', eval_metric='auc',
@@ -650,7 +514,7 @@ def _loocv_fold(fold_idx, df_with_target, covariates, mmse_needs_imputation,
 
 
 def _eval_loocv_combo_pipeline(combo, df_with_target, covariates,
-                                mmse_needs_imputation, use_smote, progression_type, k_neighbors=3,
+                                mmse_needs_imputation, progression_type,
                                 n_jobs_folds=1, mmse_only=False, combo_label=None):
     """Evaluate one hyperparameter combo across all LOO folds (full pipeline per fold).
     Returns result tuple: (n_est, max_depth, lr, subsample, colsample, auc_score).
@@ -670,7 +534,7 @@ def _eval_loocv_combo_pipeline(combo, df_with_target, covariates,
         results = [
             _loocv_fold(
                 i, df_with_target, covariates, mmse_needs_imputation,
-                combo, use_smote, progression_type, k_neighbors=k_neighbors,
+                combo, progression_type,
                 mmse_only=mmse_only,
             )
             for i in tqdm(range(n_samples), desc=fold_desc, unit="fold", leave=False, position=1)
@@ -680,7 +544,7 @@ def _eval_loocv_combo_pipeline(combo, df_with_target, covariates,
             Parallel(n_jobs=n_jobs_folds, return_as='generator')(
                 delayed(_loocv_fold)(
                     i, df_with_target, covariates, mmse_needs_imputation,
-                    combo, use_smote, progression_type, k_neighbors=k_neighbors,
+                    combo, progression_type,
                     mmse_only=mmse_only,
                 )
                 for i in range(n_samples)
@@ -701,8 +565,8 @@ def _eval_loocv_combo_pipeline(combo, df_with_target, covariates,
 
 
 def _loocv_final_evaluation(df_with_target, best_params, covariates,
-                             mmse_needs_imputation, use_smote, progression_type,
-                             n_jobs=1, k_neighbors=3, mmse_only=False):
+                             mmse_needs_imputation, progression_type,
+                             n_jobs=1, mmse_only=False):
     """Re-run LOOCV with best hyperparameters; print full report with bootstrap CIs.
     Returns a summary dict compatible with the report writer in train_best_model.
 
@@ -719,7 +583,7 @@ def _loocv_final_evaluation(df_with_target, best_params, covariates,
         for i in tqdm(range(n_samples), desc="LOOCV final evaluation", unit="fold"):
             results.append(_loocv_fold(
                 i, df_with_target, covariates, mmse_needs_imputation,
-                combo, use_smote, progression_type, k_neighbors=k_neighbors,
+                combo, progression_type,
                 mmse_only=mmse_only,
             ))
     else:
@@ -730,7 +594,7 @@ def _loocv_final_evaluation(df_with_target, best_params, covariates,
             Parallel(n_jobs=n_jobs, return_as='generator')(
                 delayed(_loocv_fold)(
                     i, df_with_target, covariates, mmse_needs_imputation,
-                    combo, use_smote, progression_type, k_neighbors=k_neighbors,
+                    combo, progression_type,
                     mmse_only=mmse_only,
                 )
                 for i in range(n_samples)
@@ -792,7 +656,7 @@ def _loocv_final_evaluation(df_with_target, best_params, covariates,
     }
 
 
-def _eval_skf_combo(combo, list_x_train, list_x_test, list_y_train, list_y_test, n_splits, feature_names, use_smote, k_neighbors=3):
+def _eval_skf_combo(combo, list_x_train, list_x_test, list_y_train, list_y_test, n_splits, feature_names):
     """Evaluate one hyperparameter combo across K folds. Returns result tuple."""
     n_estimators, max_depth, learning_rate, subsample, colsample_bytree = combo
     model_dict = {
@@ -808,7 +672,7 @@ def _eval_skf_combo(combo, list_x_train, list_x_test, list_y_train, list_y_test,
             list_x_train[i], list_x_test[i],
             list_y_train[i], list_y_test[i],
             model_dict, feature_names,
-            use_smote=use_smote, xgb_n_jobs=1, k_neighbors=k_neighbors,
+            xgb_n_jobs=1,
         )
     score = score_sum / n_splits
     return (n_estimators, max_depth, learning_rate, subsample, colsample_bytree, score)
@@ -820,16 +684,16 @@ def _eval_skf_combo(combo, list_x_train, list_x_test, list_y_train, list_y_test,
 #
 # cv_method    : 'skf'   → StratifiedKFold (default)
 #                'loocv' → Leave-One-Out CV
-# use_smote    : whether to oversample the minority class inside each CV fold/iteration
 # n_jobs       : number of parallel workers for evaluating hyperparameter combos (1 = serial)
 # n_jobs_folds : number of parallel workers for LOO folds within each combo (1 = serial).
 #                Ignored by the SKF branch. When n_jobs > 1 AND n_jobs_folds != 1 the two
 #                axes run concurrently; joblib's loky backend clamps inner workers to avoid
 #                runaway over-subscription, but prefer using only one axis at a time.
-# k_neighbors  : k parameter for SMOTENC
-def grid_search(x, y, param_grid, csv_path, feature_names, cv_method='skf', use_smote=True, n_jobs=1,
+# n_jobs_folds : (LOOCV only) parallel workers for LOO folds within each grid-search combo and
+#                the final LOOCV evaluation. 1 = serial (default). -1 = all CPUs.
+def grid_search(x, y, param_grid, csv_path, feature_names, cv_method='skf', n_jobs=1,
                 df_raw=None, covariates=None, mmse_needs_imputation=False, progression_type=None,
-                k_neighbors=3, n_jobs_folds=1, mmse_only=False):
+                n_jobs_folds=1, mmse_only=False):
     best_hyperparameters = None
     best_score = 0
 
@@ -841,7 +705,7 @@ def grid_search(x, y, param_grid, csv_path, feature_names, cv_method='skf', use_
     if cv_method == 'loocv':
         n_samples = len(df_raw)
         print(f"Using Leave-One-Out CV ({n_samples} folds x {total_combos} combos, "
-              f"n_jobs(combos)={n_jobs}, n_jobs_folds={n_jobs_folds}, use_smote={use_smote})")
+              f"n_jobs(combos)={n_jobs}, n_jobs_folds={n_jobs_folds})")
 
         scores = []
         if n_jobs == 1:
@@ -852,8 +716,8 @@ def grid_search(x, y, param_grid, csv_path, feature_names, cv_method='skf', use_
                 for idx, combo in enumerate(all_combos):
                     combo_label = f"{idx+1}/{total_combos}"
                     result = _eval_loocv_combo_pipeline(
-                        combo, df_raw, covariates, mmse_needs_imputation, use_smote, progression_type,
-                        k_neighbors=k_neighbors, n_jobs_folds=n_jobs_folds, mmse_only=mmse_only,
+                        combo, df_raw, covariates, mmse_needs_imputation, progression_type,
+                        n_jobs_folds=n_jobs_folds, mmse_only=mmse_only,
                         combo_label=combo_label,
                     )
                     scores.append(list(result))
@@ -866,8 +730,8 @@ def grid_search(x, y, param_grid, csv_path, feature_names, cv_method='skf', use_
             # to 1 worker, so n_jobs_folds is forced serial here.
             results = Parallel(n_jobs=n_jobs, return_as='generator')(
                 delayed(_eval_loocv_combo_pipeline)(
-                    combo, df_raw, covariates, mmse_needs_imputation, use_smote, progression_type,
-                    k_neighbors=k_neighbors, n_jobs_folds=1, mmse_only=mmse_only,
+                    combo, df_raw, covariates, mmse_needs_imputation, progression_type,
+                    n_jobs_folds=1, mmse_only=mmse_only,
                 )
                 for combo in all_combos
             )
@@ -894,9 +758,9 @@ def grid_search(x, y, param_grid, csv_path, feature_names, cv_method='skf', use_
             min_class = len(y_arr)
         n_splits = max(2, min(5, min_class))
         if n_splits < 5:
-            print(f"Note: Using StratifiedKFold with n_splits={n_splits} due to minority class size={min_class} (use_smote={use_smote})")
+            print(f"Note: Using StratifiedKFold with n_splits={n_splits} due to minority class size={min_class}")
         else:
-            print(f"Using StratifiedKFold with n_splits={n_splits} (use_smote={use_smote})")
+            print(f"Using StratifiedKFold with n_splits={n_splits}")
 
         skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
         for i, (train_ind, test_ind) in enumerate(skf.split(x, y_arr)):
@@ -908,7 +772,7 @@ def grid_search(x, y, param_grid, csv_path, feature_names, cv_method='skf', use_
         print(f"Grid search: {total_combos} hyperparameter combinations (n_jobs={n_jobs})")
 
         results = Parallel(n_jobs=n_jobs, return_as='generator')(
-            delayed(_eval_skf_combo)(combo, list_x_train, list_x_test, list_y_train, list_y_test, n_splits, feature_names, use_smote, k_neighbors=k_neighbors)
+            delayed(_eval_skf_combo)(combo, list_x_train, list_x_test, list_y_train, list_y_test, n_splits, feature_names)
             for combo in all_combos
         )
         scores = []
@@ -933,18 +797,14 @@ def grid_search(x, y, param_grid, csv_path, feature_names, cv_method='skf', use_
 #
 # cv_method  : 'skf'   → StratifiedKFold grid search (default)
 #              'loocv' → Leave-One-Out CV grid search
-# use_smote  : whether to apply SMOTENC inside each CV fold (grid search) and in the final model
-# k_neighbors : k parameter for SMOTENC
 #
 # LOOCV modes:
-#   Mode A (loocv + no SMOTE) : no train/test split; LOOCV on full dataset IS the evaluation.
-#   Mode B (loocv + SMOTE)    : 80/20 split; LOOCV grid search on training set (per-fold MMSE);
-#                                final model evaluated on holdout via build_model_final.
+#   loocv : no train/test split; LOOCV on full dataset IS the evaluation.
 # n_jobs_folds : (LOOCV only) parallel workers for LOO folds within each grid-search combo and
 #                the final LOOCV evaluation. 1 = serial (default). -1 = all CPUs.
 #                Combine with n_jobs=1 for fold-level-only parallelism (recommended), or
 #                leave at 1 and set n_jobs > 1 for combo-level-only parallelism.
-def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="saved_models", model_base_name=None, save_artifacts=True, cv_method='skf', use_smote=True, n_jobs=1, k_neighbors=3, n_jobs_folds=1, mmse_only=False):
+def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="saved_models", model_base_name=None, save_artifacts=True, cv_method='skf', n_jobs=1, n_jobs_folds=1, mmse_only=False):
     
     dataset = dataset.copy()
 
@@ -962,11 +822,11 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
     )
 
     # ══════════════════════════════════════════════════════════════════════════
-    #  Mode A: LOOCV without SMOTE  (no train/test split)
+    #  LOOCV mode (no train/test split)
     # ══════════════════════════════════════════════════════════════════════════
-    if cv_method == 'loocv' and not use_smote:
+    if cv_method == 'loocv':
         print(f"\n{'='*60}")
-        print(f"Mode A: LOOCV without SMOTE — full dataset ({len(dataset)} samples)")
+        print(f"LOOCV — full dataset ({len(dataset)} samples)")
         print(f"MMSE imputation: {'per-fold (fit on N-1)' if mmse_needs_imputation else 'not needed'}")
         print(f"{'='*60}")
 
@@ -976,18 +836,18 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
         # Grid search with per-fold pipeline (MMSE imputed inside each LOO fold)
         model_dict = grid_search(
             None, None, param_grid, csv_path, None,
-            cv_method='loocv', use_smote=False, n_jobs=n_jobs,
+            cv_method='loocv', n_jobs=n_jobs,
             df_raw=dataset, covariates=covariates,
             mmse_needs_imputation=mmse_needs_imputation,
-            progression_type=progression_type, k_neighbors=k_neighbors,
+            progression_type=progression_type,
             n_jobs_folds=n_jobs_folds, mmse_only=mmse_only,
         )
 
         # Final evaluation: re-run LOOCV with best hyperparameters
         summary = _loocv_final_evaluation(
             dataset, model_dict, covariates, mmse_needs_imputation,
-            use_smote=False, progression_type=progression_type,
-            n_jobs=n_jobs_folds, k_neighbors=k_neighbors, mmse_only=mmse_only,
+            progression_type=progression_type,
+            n_jobs=n_jobs_folds, mmse_only=mmse_only,
         )
 
         # Save report only (LOOCV produces N models; no single model to persist)
@@ -998,8 +858,7 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
             with open(report_path, "w") as f:
                 f.write(f"Dataset base: {base}\n")
                 f.write(f"Progression type: {progression_type}\n")
-                f.write(f"CV method: loocv (Mode A — no train/test split)\n")
-                f.write(f"Class balancing: disabled\n")
+                f.write(f"CV method: loocv (no train/test split)\n")
                 f.write(f"MMSE imputation: {'per-fold (fit on N-1)' if mmse_needs_imputation else 'not needed'}\n")
                 f.write(f"Total samples: {len(dataset)}\n")
                 f.write("\nBest hyperparameters:\n")
@@ -1022,124 +881,6 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
             print(f"\nSaved report: {report_path}")
 
         return None, None  # No single model in Mode A
-
-    # ══════════════════════════════════════════════════════════════════════════
-    #  Mode B: LOOCV with SMOTE  (80/20 split)
-    # ══════════════════════════════════════════════════════════════════════════
-    elif cv_method == 'loocv' and use_smote:
-        print(f"\n{'='*60}")
-        print(f"Mode B: LOOCV with SMOTE — 80/20 split ({len(dataset)} total)")
-        print(f"MMSE imputation: {'per-fold in grid search; full-train for final model' if mmse_needs_imputation else 'not needed'}")
-        print(f"{'='*60}")
-
-        # --- 80/20 stratified split on raw DataFrame ---
-        train_idx, test_idx = train_test_split(
-            dataset.index, test_size=0.2, random_state=42, stratify=dataset['target'],
-        )
-        df_train_raw = dataset.loc[train_idx].copy()
-        df_test_raw  = dataset.loc[test_idx].copy()
-
-        # --- MMSE imputation for FINAL MODEL (fit on full training set) ---
-        mmse_imputer_obj = None
-        if mmse_needs_imputation:
-            print(f"Fitting MMSE imputer on training set ({len(df_train_raw)} samples) with {len(covariates)} covariates...")
-            mmse_imputer_obj, df_train_imputed = fit_mmse_imputer(df_train_raw, covariates)
-            df_test_imputed = transform_mmse(df_test_raw, covariates, mmse_imputer_obj)
-            print("MMSE imputation complete (train fit, test transformed).")
-        else:
-            df_train_imputed = df_train_raw
-            df_test_imputed  = df_test_raw
-
-        # --- Process imputed data for the FINAL MODEL ---
-        y_train_target = df_train_imputed['target'].values
-        y_test_target  = df_test_imputed['target'].values
-        df_tr_feat = create_delta_features(df_train_imputed.drop(columns=['target']))
-        df_te_feat = create_delta_features(df_test_imputed.drop(columns=['target']))
-        df_tr_feat['target'] = y_train_target
-        df_te_feat['target'] = y_test_target
-        processed_train, _, _ = preprocess_data(df_tr_feat, progression_type, mmse_only=mmse_only)
-        processed_test,  _, _ = preprocess_data(df_te_feat, progression_type, mmse_only=mmse_only)
-
-        feature_names = [c for c in processed_train.columns if c != 'target']
-        for col in feature_names:
-            if col not in processed_test.columns:
-                processed_test[col] = np.nan
-        processed_test = processed_test[feature_names + ['target']]
-
-        X_train = processed_train.drop(columns=['target']).values
-        X_test  = processed_test.drop(columns=['target']).values
-        y_train = processed_train['target'].values
-        y_test  = processed_test['target'].values
-
-        # --- Grid search: LOOCV on RAW training data (per-fold MMSE inside each LOO fold) ---
-        model_dict = grid_search(
-            None, None, param_grid, csv_path, None,
-            cv_method='loocv', use_smote=True, n_jobs=n_jobs,
-            df_raw=df_train_raw, covariates=covariates,
-            mmse_needs_imputation=mmse_needs_imputation,
-            progression_type=progression_type,
-            n_jobs_folds=n_jobs_folds, mmse_only=mmse_only,
-        )
-
-        # --- Final model trained on full processed training set, evaluated on holdout ---
-        model, columns, imputer, scaler, summary = build_model_final(
-            X_train, X_test, y_train, y_test, model_dict, feature_names, use_smote=True, k_neighbors=k_neighbors,
-        )
-
-        try:
-            model.feature_names_in_ = np.array(columns)
-        except Exception:
-            pass
-
-        if save_artifacts:
-            os.makedirs(save_dir, exist_ok=True)
-            base = model_base_name or os.path.splitext(os.path.basename(csv_path))[0]
-            model_path   = os.path.join(save_dir, f"{base}_model_{progression_type}.pkl")
-            scaler_path  = os.path.join(save_dir, f"{base}_scaler_{progression_type}.pkl")
-            imputer_path = os.path.join(save_dir, f"{base}_imputer_{progression_type}.pkl")
-
-            joblib.dump(model, model_path)
-            joblib.dump(scaler, scaler_path)
-            joblib.dump(imputer, imputer_path)
-
-            print("\nSaved artifacts:")
-            print(f"- Model:   {model_path}")
-            print(f"- Scaler:  {scaler_path}")
-            print(f"- Imputer: {imputer_path}")
-
-            if mmse_imputer_obj is not None:
-                mmse_imp_path = os.path.join(save_dir, f"{base}_mmse_imputer_{progression_type}.pkl")
-                joblib.dump(mmse_imputer_obj, mmse_imp_path)
-                print(f"- MMSE Imputer: {mmse_imp_path}")
-
-            report_path = os.path.join(save_dir, f"{base}_report_{progression_type}.txt")
-            with open(report_path, "w") as f:
-                f.write(f"Dataset base: {base}\n")
-                f.write(f"Progression type: {progression_type}\n")
-                f.write(f"CV method: loocv (Mode B — 80/20 split + SMOTE)\n")
-                f.write(f"MMSE imputation: {'per-fold in grid search; full-train for final model' if mmse_imputer_obj else 'not needed'}\n")
-                f.write(f"Class balancing: SMOTENC\n")
-                f.write("Best hyperparameters:\n")
-                for k, v in model.get_params().items():
-                    if k in ["n_estimators", "max_depth", "learning_rate", "subsample", "colsample_bytree", "random_state", "objective", "eval_metric"]:
-                        f.write(f"  {k}: {v}\n")
-                f.write("\nClassification Report:\n")
-                f.write(summary["classification_report"] + "\n")
-                f.write(f"\nBase ROC AUC: {summary['base_auc']:.4f}\n")
-                bm = summary["bootstrap_metrics"]
-                f.write(f"Bootstrap 95% CI (n=1000, valid_samples={bm['valid_samples']}):\n")
-                f.write(f"- Accuracy: {bm['accuracy'][0]:.3f} (CI: {bm['accuracy'][1][0]:.3f}, {bm['accuracy'][1][1]:.3f}) range={bm['accuracy'][1][1] - bm['accuracy'][1][0]:.3f}\n")
-                f.write(f"- Precision (macro): {bm['precision_macro'][0]:.3f} (CI: {bm['precision_macro'][1][0]:.3f}, {bm['precision_macro'][1][1]:.3f}) range={bm['precision_macro'][1][1] - bm['precision_macro'][1][0]:.3f}\n")
-                f.write(f"- Recall (macro): {bm['recall_macro'][0]:.3f} (CI: {bm['recall_macro'][1][0]:.3f}, {bm['recall_macro'][1][1]:.3f}) range={bm['recall_macro'][1][1] - bm['recall_macro'][1][0]:.3f}\n")
-                f.write(f"- F1 (macro): {bm['f1_macro'][0]:.3f} (CI: {bm['f1_macro'][1][0]:.3f}, {bm['f1_macro'][1][1]:.3f}) range={bm['f1_macro'][1][1] - bm['f1_macro'][1][0]:.3f}\n")
-                auc_lo, auc_hi = bm['auc'][1]
-                if not np.isnan(auc_lo):
-                    f.write(f"- ROC AUC: {bm['auc'][0]:.3f} (CI: {auc_lo:.3f}, {auc_hi:.3f}) range={auc_hi - auc_lo:.3f}\n")
-                else:
-                    f.write(f"- ROC AUC: {bm['auc'][0]:.3f} (CI unavailable; too few valid resamples)\n")
-            print(f"- Report:  {report_path}")
-
-        return model, columns
 
     # ══════════════════════════════════════════════════════════════════════════
     #  SKF (unchanged default behaviour)
@@ -1188,11 +929,11 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
         y_train = processed_train['target'].values
         y_test = processed_test['target'].values
 
-        # --- Step 5: Grid search (uses SMOTE inside each CV fold) ---
-        model_dict = grid_search(X_train, y_train, param_grid, csv_path, feature_names, cv_method=cv_method, use_smote=use_smote, n_jobs=n_jobs, k_neighbors=k_neighbors, mmse_only=mmse_only)
+        # --- Step 5: Grid search ---
+        model_dict = grid_search(X_train, y_train, param_grid, csv_path, feature_names, cv_method=cv_method, n_jobs=n_jobs, mmse_only=mmse_only)
 
         # --- Step 6: Final model with full report ---
-        model, columns, imputer, scaler, summary = build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_names, use_smote=use_smote, k_neighbors=k_neighbors)
+        model, columns, imputer, scaler, summary = build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_names)
 
         try:
             model.feature_names_in_ = np.array(columns)
@@ -1226,7 +967,6 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
                 f.write(f"Progression type: {progression_type}\n")
                 f.write(f"MMSE imputation: {'post-split (train-fit)' if mmse_imputer_obj else 'not needed'}\n")
                 f.write(f"CV method: {cv_method}\n")
-                f.write(f"Class balancing: {'SMOTENC' if use_smote else 'disabled'}\n")
                 f.write("Best hyperparameters:\n")
                 for k, v in model.get_params().items():
                     if k in ["n_estimators", "max_depth", "learning_rate", "subsample", "colsample_bytree", "random_state", "objective", "eval_metric"]:
@@ -1248,390 +988,3 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
             print(f"- Report:  {report_path}")
 
         return model, columns
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-#  VISUALIZATION  
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def plot_feature_importance(importances, feature_names, top_n=20, title=None, save_path=None,
-                            title_fontsize=14, label_fontsize=12, tick_fontsize=10, value_fontsize=8):
-    """Publication-quality horizontal bar chart of top-N feature importances.
-
-    Parameters
-    ----------
-    importances : array-like or fitted model
-        Either a 1-D array of importance values or a fitted model with
-        a `feature_importances_` attribute.
-    feature_names : list[str]
-        Feature names corresponding to the importance values.
-    top_n : int
-        Number of top features to display.
-    title : str, optional
-        Custom plot title.
-    save_path : str, optional
-        If provided, save the figure to this path.
-    title_fontsize : int
-        Font size for the chart title.
-    label_fontsize : int
-        Font size for axis labels.
-    tick_fontsize : int
-        Font size for tick labels (feature names).
-    value_fontsize : int
-        Font size for the value annotations on each bar.
-    """
-    if hasattr(importances, 'feature_importances_'):
-        importances = importances.feature_importances_
-    fi = pd.DataFrame({'Feature': feature_names, 'Importance': importances})
-    fi = fi.sort_values('Importance', ascending=True).tail(top_n)
-
-    fig, ax = plt.subplots(figsize=(10, max(5, top_n * 0.35)))
-    colors = plt.cm.viridis(np.linspace(0.25, 0.85, len(fi)))
-    ax.barh(fi['Feature'], fi['Importance'], color=colors, edgecolor='white', linewidth=0.5)
-    for i, (val, name) in enumerate(zip(fi['Importance'], fi['Feature'])):
-        ax.text(val + fi['Importance'].max() * 0.01, i, f'{val:.4f}', va='center', fontsize=value_fontsize)
-    ax.set_xlabel('Importance (gain)', fontsize=label_fontsize)
-    ax.set_title(title or f'Top {top_n} Feature Importances', fontsize=title_fontsize, fontweight='bold')
-    ax.tick_params(axis='both', labelsize=tick_fontsize)
-    ax.spines[['top', 'right']].set_visible(False)
-    ax.grid(axis='x', alpha=0.3, linestyle='--')
-    plt.tight_layout()
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.show()
-
-
-def plot_confusion_mat(y_true, y_pred, class_labels=None, title=None, save_path=None):
-    """Publication-quality annotated confusion matrix heatmap.
-
-    Parameters
-    ----------
-    y_true, y_pred : array-like
-        True and predicted labels.
-    class_labels : list[str], optional
-        Display names for classes (default: ['0', '1']).
-    title : str, optional
-        Custom plot title.
-    save_path : str, optional
-        If provided, save the figure to this path.
-    """
-    cm = confusion_matrix(y_true, y_pred)
-    if class_labels is None:
-        class_labels = [str(c) for c in sorted(np.unique(y_true))]
-
-    fig, ax = plt.subplots(figsize=(6, 5))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=class_labels,
-                yticklabels=class_labels, linewidths=0.5, linecolor='gray',
-                cbar_kws={'shrink': 0.8}, ax=ax)
-    ax.set_xlabel('Predicted Label', fontsize=12)
-    ax.set_ylabel('True Label', fontsize=12)
-    ax.set_title(title or 'Confusion Matrix', fontsize=14, fontweight='bold')
-    plt.tight_layout()
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.show()
-
-
-def plot_roc(y_true, y_proba, title=None, save_path=None):
-    """Publication-quality ROC curve with AUC annotation and diagonal reference.
-
-    Parameters
-    ----------
-    y_true : array-like
-        True binary labels.
-    y_proba : array-like
-        Predicted probabilities for the positive class.
-    title : str, optional
-        Custom plot title.
-    save_path : str, optional
-        If provided, save the figure to this path.
-    """
-    fpr, tpr, _ = roc_curve(y_true, y_proba)
-    auc_val = roc_auc_score(y_true, y_proba)
-
-    fig, ax = plt.subplots(figsize=(7, 6))
-    ax.plot(fpr, tpr, color='#2E86AB', lw=2.5, label=f'ROC curve (AUC = {auc_val:.3f})')
-    ax.plot([0, 1], [0, 1], 'k--', lw=1, alpha=0.5, label='Random classifier')
-    ax.fill_between(fpr, tpr, alpha=0.15, color='#2E86AB')
-    ax.set_xlim([-0.02, 1.02])
-    ax.set_ylim([-0.02, 1.02])
-    ax.set_xlabel('False Positive Rate', fontsize=12)
-    ax.set_ylabel('True Positive Rate', fontsize=12)
-    ax.set_title(title or 'Receiver Operating Characteristic', fontsize=14, fontweight='bold')
-    ax.legend(loc='lower right', fontsize=11, framealpha=0.9)
-    ax.spines[['top', 'right']].set_visible(False)
-    ax.grid(alpha=0.3, linestyle='--')
-    plt.tight_layout()
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.show()
-
-    return fpr, tpr, auc_val
-
-
-def plot_feature_correlation(df, figsize):
-    """Correlation heatmap for an already-aggregated feature DataFrame."""
-    imputer = SimpleImputer(strategy='median')
-    df_imputed = pd.DataFrame(imputer.fit_transform(df), columns=df.columns)
-    corr = df_imputed.corr()
-
-    plt.figure(figsize=figsize)
-    sns.heatmap(
-        corr,
-        cmap='coolwarm',
-        center=0,
-        annot=False,
-        fmt=".2f",
-        linewidths=0.5,
-        cbar_kws={"shrink": 0.8}
-    )
-    plt.title("Feature Correlation Map (Original Features)")
-    plt.tight_layout()
-    plt.show()
-
-
-def eval_model(model, x, y):
-    """Print classification report + ROC AUC for an already-fitted model."""
-    y_pred = model.predict(x)
-    y_proba = model.predict_proba(x)[:, 1]
-
-    print("Classification Report:")
-    print(classification_report(y, y_pred))
-    print(f"\nROC AUC Score: {roc_auc_score(y, y_proba):.4f}")
-
-    fpr, tpr, _ = roc_curve(y, y_proba)
-    return fpr, tpr, roc_auc_score(y, y_proba)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-#  LEAD-TIME ANALYSIS  
-# ═══════════════════════════════════════════════════════════════════════════════
-
-### Note: This will all need to be changed to the new lead time cohort structure/experimental design. 
-
-def add_time_dimension(df, months_between_visits=12):
-    """Add a ``months_since_baseline`` column (list per patient) to *df*."""
-    df = df.copy()
-    df['months_since_baseline'] = df['Progression'].apply(
-        lambda x: [i * months_between_visits for i in range(len(eval(x)))]
-    )
-    return df
-
-
-def create_delta_features_truncated(df, max_visit):
-    """Visit-agnostic features using only the first *max_visit* visits.
-
-    Identical feature set to ``create_delta_features`` but truncates each
-    time-series before engineering — used for lead-time analysis.
-    The output column set is constant regardless of *max_visit*, enabling
-    a single trained model to score any truncation length.
-    """
-    df = df.copy()
-    new_columns = {}
-
-    _parse_array_columns(df)
-
-    # Truncate list columns to max_visit before engineering
-    for col in df.columns:
-        if _is_numeric_list_col(df[col]):
-            df[col] = df[col].apply(
-                lambda x: x[:max_visit] if isinstance(x, list) else np.nan)
-
-    _engineer_visit_agnostic(df, new_columns)
-
-    df = pd.concat([df, pd.DataFrame(new_columns, index=df.index)], axis=1)
-    array_cols = [
-        c for c in df.columns
-        if isinstance(df[c].iloc[0], list) and c != 'months_since_baseline'
-    ] if len(df) > 0 else []
-    return df.drop(columns=array_cols)
-
-
-def get_first_progression_visit(row, progression_code=1):
-    """Return the 1-indexed visit number where progression first occurred, or NaN."""
-    progression = eval(row['Progression'])
-    for i, code in enumerate(progression):
-        if code >= progression_code:
-            return i + 1
-    return np.nan
-
-
-def evaluate_lead_time(df, model, imputer, scaler, feature_names,
-                       threshold, progression_type='CN', min_visits=2):
-    """
-    For each progressor in *df*, find the earliest visit at which the
-    (single, visit-agnostic) model exceeds *threshold* and compute the
-    lead time (months before physician diagnosis).
-
-    Parameters
-    ----------
-    df              : DataFrame with 'Progression' and 'months_since_baseline'.
-    model           : trained XGBClassifier (visit-agnostic features).
-    imputer, scaler : fitted SimpleImputer / StandardScaler.
-    feature_names   : list[str] — feature columns the model was trained on.
-    threshold       : probability threshold for a positive prediction.
-    progression_type : 'CN' or 'AD'.
-    min_visits      : minimum visits required to make a prediction (need ≥2
-                      for slope / acceleration).
-
-    Returns
-    -------
-    list of lead times in months.
-    """
-    lead_times = []
-    prog_code = 2 if progression_type == 'AD' else 1
-
-    for idx, row in df.iterrows():
-        try:
-            progression = eval(row['Progression'])
-            months = row['months_since_baseline']
-            if not isinstance(months, list):
-                continue
-
-            # Find physician diagnosis visit
-            diag_idx = next(
-                (i for i, c in enumerate(progression) if c >= prog_code), None)
-            if diag_idx is None:
-                continue
-            diag_time = months[diag_idx]
-
-            # Check model predictions at progressively more visits
-            row_df = df.loc[[idx]]
-            for visit in range(min_visits, diag_idx + 1):
-                try:
-                    trunc = create_delta_features_truncated(row_df, max_visit=visit)
-                    # Align columns to training features
-                    for col in feature_names:
-                        if col not in trunc.columns:
-                            trunc[col] = np.nan
-                    X = trunc[feature_names].values
-                    X_proc = scaler.transform(imputer.transform(X))
-                    proba = model.predict_proba(X_proc)[0, 1]
-                    if proba >= threshold:
-                        lead_times.append(diag_time - months[visit - 1])
-                        break
-                except Exception as e:
-                    print(f"  visit {visit}, patient {idx}: {e}")
-                    continue
-        except Exception as e:
-            print(f"  patient {idx}: {e}")
-            continue
-
-    return lead_times
-
-
-def evaluate_lead_time_full(df, model, imputer, scaler, feature_names,
-                            threshold, progression_type='CN', min_visits=2):
-    """
-    Evaluate both progressors AND non-progressors on a lead-time cohort.
-
-    For progressors: checks whether the model flags them before diagnosis
-    and how early (lead time). For non-progressors: checks whether the
-    model incorrectly flags them (false positives) using all their visits.
-
-    Returns
-    -------
-    dict with keys:
-        'lead_times'       : list[float] — months of early detection per TP
-        'true_positives'   : int — progressors detected before diagnosis
-        'false_negatives'  : int — progressors NOT detected
-        'true_negatives'   : int — non-progressors correctly left alone
-        'false_positives'  : int — non-progressors incorrectly flagged
-        'total_progressors': int
-        'total_non_progressors': int
-        'sensitivity'      : float — TP / (TP + FN)
-        'specificity'      : float — TN / (TN + FP)
-        'fp_details'       : list[dict] — visit/proba info for each FP
-    """
-    prog_code = 2 if progression_type == 'AD' else 1
-
-    lead_times = []
-    tp = 0
-    fn = 0
-    tn = 0
-    fp = 0
-    fp_details = []
-    total_prog = 0
-    total_nonprog = 0
-
-    for idx, row in df.iterrows():
-        try:
-            progression = eval(row['Progression'])
-            months = row.get('months_since_baseline')
-            if not isinstance(months, list):
-                continue
-
-            diag_idx = next(
-                (i for i, c in enumerate(progression) if c >= prog_code), None)
-            is_progressor = diag_idx is not None
-
-            if is_progressor:
-                total_prog += 1
-                diag_time = months[diag_idx]
-                detected = False
-                row_df = df.loc[[idx]]
-                for visit in range(min_visits, diag_idx + 1):
-                    try:
-                        trunc = create_delta_features_truncated(row_df, max_visit=visit)
-                        for col in feature_names:
-                            if col not in trunc.columns:
-                                trunc[col] = np.nan
-                        X = trunc[feature_names].values
-                        X_proc = scaler.transform(imputer.transform(X))
-                        proba = model.predict_proba(X_proc)[0, 1]
-                        if proba >= threshold:
-                            lead_times.append(diag_time - months[visit - 1])
-                            tp += 1
-                            detected = True
-                            break
-                    except Exception:
-                        continue
-                if not detected:
-                    fn += 1
-            else:
-                # Non-progressor: run through ALL visits and check for false alarm
-                total_nonprog += 1
-                flagged = False
-                row_df = df.loc[[idx]]
-                n_visits = len(progression)
-                for visit in range(min_visits, n_visits + 1):
-                    try:
-                        trunc = create_delta_features_truncated(row_df, max_visit=visit)
-                        for col in feature_names:
-                            if col not in trunc.columns:
-                                trunc[col] = np.nan
-                        X = trunc[feature_names].values
-                        X_proc = scaler.transform(imputer.transform(X))
-                        proba = model.predict_proba(X_proc)[0, 1]
-                        if proba >= threshold:
-                            fp += 1
-                            fp_details.append({
-                                'patient_idx': idx,
-                                'flagged_at_visit': visit,
-                                'probability': round(float(proba), 3),
-                            })
-                            flagged = True
-                            break
-                    except Exception:
-                        continue
-                if not flagged:
-                    tn += 1
-
-        except Exception:
-            continue
-
-    sensitivity = tp / (tp + fn) if (tp + fn) > 0 else None
-    specificity = tn / (tn + fp) if (tn + fp) > 0 else None
-
-    return {
-        'lead_times': lead_times,
-        'true_positives': tp,
-        'false_negatives': fn,
-        'true_negatives': tn,
-        'false_positives': fp,
-        'total_progressors': total_prog,
-        'total_non_progressors': total_nonprog,
-        'sensitivity': sensitivity,
-        'specificity': specificity,
-        'fp_details': fp_details,
-    }

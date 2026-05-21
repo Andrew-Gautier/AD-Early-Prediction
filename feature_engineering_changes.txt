@@ -9,3 +9,13 @@ Step 3. Remove standaridization and normalization from the model.
 Step 4. With SMOTE, imputation, and preproecssing removed, look to condense unecessary methods and preprocessing calls. Future recoding of variables will be built in preprocessing and then called in model. 
 Step 5. Provide a simple readme of how a XGBoost model experiment could be run with SKF and LOOCV affter these changes have been implemented. 
 
+Future Steps DO NOT IMPLEMENT
+
+
+Step 6. Overhaul of XGBoost parameters. 
+    - colsample 
+    - cateogorical support
+    - hyperparams ...
+    - tree history
+
+Step 7. Categorical recoding
