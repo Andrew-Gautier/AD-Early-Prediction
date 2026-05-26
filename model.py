@@ -23,7 +23,7 @@ except ImportError:
     def tqdm(iterable, **kwargs):
         return iterable
 from preprocessing import create_target
-from feature_engineering import create_delta_features, preprocess_data
+from feature_engineering import create_delta_features, preprocess_data, CATEGORICAL_COLUMNS
 
 def bootstrap_all_metrics_ci(
     y_true,
@@ -783,8 +783,6 @@ def train_with_rfe(
     selected_features : list[str]  — feature names chosen by RFECV.
     rfecv           : fitted RFECV object (exposes .cv_results_, .n_features_, .support_).
     """
-    from feature_engineering import create_delta_features, preprocess_data, CATEGORICAL_COLUMNS
-
     dataset = dataset.copy()
 
     # ── Step 1: target column ────────────────────────────────────────────────
@@ -878,14 +876,17 @@ def train_with_rfe(
         warnings.simplefilter('ignore')
         rfecv.fit(X_train_enc.values, y_train)
 
-    selected_features = [f for f, s in zip(feature_names, rfecv.support_) if s]
+    selected_features  = [f for f, s in zip(feature_names, rfecv.support_) if s]
+    eliminated_features = [f for f, s in zip(feature_names, rfecv.support_) if not s]
     print(f"\nOptimal features selected: {rfecv.n_features_} / {len(feature_names)}")
-    print(f"Eliminated: {len(feature_names) - rfecv.n_features_} features")
-    print(f"Selected: {selected_features}")
+    print(f"Eliminated ({len(eliminated_features)}): {eliminated_features}")
+    print(f"Selected  ({len(selected_features)}): {selected_features}")
 
-    # ── Step 8: restore category dtype on the filtered DataFrames ────────────
-    X_train_sel = _restore_categoricals(X_train_df[selected_features], encoding_map)
-    X_test_sel  = _restore_categoricals(X_test_df[selected_features],  encoding_map)
+    # ── Step 8: slice to selected features (category dtype already intact) ────
+    # X_train_df/X_test_df retain the original category dtype from preprocess_data,
+    # so no re-encoding is needed — just select the surviving columns.
+    X_train_sel = X_train_df[selected_features]
+    X_test_sel  = X_test_df[selected_features]
 
     # ── Step 9: final model on selected features ──────────────────────────────
     print(f"\n{'='*60}")
@@ -917,8 +918,11 @@ def train_with_rfe(
             f.write(f"\nRFECV settings: step={rfe_step}, scoring={rfe_scoring}\n")
             f.write(f"Features before RFE: {len(feature_names)}\n")
             f.write(f"Features after RFE:  {rfecv.n_features_}\n")
-            f.write(f"\nSelected features:\n")
+            f.write(f"\nSelected features ({rfecv.n_features_}):\n")
             for feat in selected_features:
+                f.write(f"  {feat}\n")
+            f.write(f"\nEliminated features ({len(feature_names) - rfecv.n_features_}):\n")
+            for feat in eliminated_features:
                 f.write(f"  {feat}\n")
             f.write("\nClassification Report:\n")
             f.write(summary["classification_report"] + "\n")
@@ -929,4 +933,4 @@ def train_with_rfe(
         print(f"- Model:  {model_path}")
         print(f"- Report: {report_path}")
 
-    return model, selected_features, rfecv
+    return model, selected_features, rfecv, summary
