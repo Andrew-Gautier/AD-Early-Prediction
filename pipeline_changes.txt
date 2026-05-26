@@ -36,7 +36,7 @@ Next step on the pipeline will be to support MICE/and or more sophisticated impu
 
 05-26
 
-Sticking with Recursive feature elimination. One large overhaul is needed, replacing the grid searching with bayestian optimization Optuna library. Still can use a preliminary coarse search, then feature elimination, with a final exhaustive sweep. 
+Removing RFECV and not implementing MCTS for now. One large overhaul is needed, replacing the grid searching with bayestian optimization Optuna library. Still can use a preliminary coarse search, then feature elimination, with a final exhaustive sweep. 
 
 Some smaller changes needed
 visualization - SHAP variable charts. 
