@@ -1,0 +1,378 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath, amssymb}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{caption}
+
+\hypersetup{colorlinks=true, linkcolor=blue, urlcolor=blue, citecolor=blue}
+
+\title{\textbf{Feature Engineering for Longitudinal Alzheimer's Disease Progression Prediction}\\[0.5em]
+\large Technical Description of the Feature Engineering Pipeline}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+% ============================================================
+\section{Overview}
+\label{sec:overview}
+% ============================================================
+
+The feature engineering pipeline transforms per-subject longitudinal visit records into a fixed-width, visit-count-agnostic feature vector suitable for gradient-boosted tree classification.
+
+Each subject in the dataset has between 2 and 10 clinic visits.  The raw data encodes repeated measurements as variable-length lists (one entry per visit), which cannot be fed directly to a standard tabular classifier.  The pipeline extracts summary statistics from these lists, yielding a single row per subject regardless of the number of visits observed.
+
+The transformation is implemented in \texttt{create\_delta\_features()} and \texttt{preprocess\_data()}.  All feature engineering is applied \emph{independently} to the training and test splits inside the cross-validation loop, so no information leaks from held-out samples.
+
+The final feature set contains three broad categories:
+\begin{enumerate}
+    \item \textbf{Static features} --- demographics and comorbidities measured once or assumed stable across visits (18 variables).
+    \item \textbf{Longitudinal summary features} --- visit-agnostic statistics derived from each repeated-measurement variable (up to 13 statistics per longitudinal column).
+    \item \textbf{Engineered interaction features} --- explicit cross-variable interaction terms capturing dual sensory impairment (3 variables).
+\end{enumerate}
+
+% ============================================================
+\section{Input Variables}
+\label{sec:input}
+% ============================================================
+
+\subsection{Static Variables}
+
+Static variables are collected at baseline or treated as time-invariant.  They are passed directly to the model without transformation.
+
+\begin{longtable}{@{}lll@{}}
+\toprule
+\textbf{Variable} & \textbf{Type} & \textbf{Description} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Variable} & \textbf{Type} & \textbf{Description} \\
+\midrule
+\endhead
+\midrule
+\multicolumn{3}{r}{\small\emph{Continued on next page}}\\
+\endfoot
+\bottomrule
+\endlastfoot
+\multicolumn{3}{l}{\textit{Numeric}} \\[2pt]
+\texttt{age}     & Continuous & Age at baseline visit (years) \\
+\texttt{EDUC}    & Continuous & Years of formal education \\
+\texttt{SMOKYRS} & Continuous & Total lifetime years of smoking \\[6pt]
+\multicolumn{3}{l}{\textit{Binary (0/1)}} \\[2pt]
+\texttt{NACCFAM}  & Binary & Family history of cognitive impairment or dementia \\
+\texttt{CVHATT}   & Binary & History of myocardial infarction / heart attack \\
+\texttt{CVAFIB}   & Binary & History of atrial fibrillation \\
+\texttt{DIABETES} & Binary & Diabetes mellitus diagnosis \\
+\texttt{HYPERCHO} & Binary & Hypercholesterolaemia diagnosis \\
+\texttt{HYPERTEN} & Binary & Hypertension diagnosis \\
+\texttt{B12DEF}   & Binary & Vitamin B\textsubscript{12} deficiency diagnosis \\
+\texttt{DEPD}     & Binary & Active depression diagnosis \\
+\texttt{ANX}      & Binary & Active anxiety diagnosis \\
+\texttt{NACCTBI}  & Binary & History of traumatic brain injury \\
+\texttt{HISPANIC} & Binary & Hispanic/Latino ethnicity \\[6pt]
+\multicolumn{3}{l}{\textit{Categorical (unordered)}} \\[2pt]
+\texttt{SEX}      & Categorical & Sex (male / female) \\
+\texttt{RACE}     & Categorical & Self-reported race \\
+\texttt{ALCOHOL}  & Categorical & Alcohol consumption level (none / social / moderate / heavy) \\
+\texttt{NACCNE4S} & Categorical & APOE $\varepsilon$4 allele count (0 / 1 / 2 copies) \\
+\end{longtable}
+
+Categorical variables are encoded as \texttt{pandas} \texttt{category} dtype and consumed natively by XGBoost with \texttt{enable\_categorical=True}, which applies an optimised tree-splitting strategy for unordered categories.
+
+\subsection{Longitudinal Variables}
+
+Each of the 19 variables below is stored as a list of per-visit measurements.  Missing visits within a sequence are represented as \texttt{NaN}.
+
+\begin{longtable}{@{}lll@{}}
+\toprule
+\textbf{Variable} & \textbf{NACC Domain} & \textbf{Description} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Variable} & \textbf{NACC Domain} & \textbf{Description} \\
+\midrule
+\endhead
+\midrule
+\multicolumn{3}{r}{\small\emph{Continued on next page}}\\
+\endfoot
+\bottomrule
+\endlastfoot
+\multicolumn{3}{l}{\textit{Global cognitive and psychiatric scales}} \\[2pt]
+\texttt{NACCMMSE} & Cognition      & Mini-Mental State Examination score (0--30; lower = worse) \\
+\texttt{CDRSUM}   & Global staging & CDR\textsuperscript{\textregistered} Sum of Boxes (0--18; higher = worse) \\
+\texttt{NACCGDS}  & Neuropsychiatry & Geriatric Depression Scale short-form score (0--15) \\[6pt]
+\multicolumn{3}{l}{\textit{Functional Activities Questionnaire (FAQ) items}} \\[2pt]
+\texttt{BILLS}    & ADL & Ability to pay bills and handle bank statements \\
+\texttt{TAXES}    & ADL & Ability to prepare tax returns or handle finances \\
+\texttt{SHOPPING} & ADL & Ability to shop alone (groceries, clothing) \\
+\texttt{GAMES}    & ADL & Ability to play games of skill (cards, chess) \\
+\texttt{STOVE}    & ADL & Ability to prepare a hot meal safely \\
+\texttt{MEALPREP} & ADL & Ability to assemble and serve a complete meal \\
+\texttt{EVENTS}   & ADL & Ability to keep track of current events \\
+\texttt{PAYATTN}  & ADL & Ability to pay attention to / understand TV, book, or magazine \\
+\texttt{REMDATES} & ADL & Ability to remember appointments, family events, holidays \\
+\texttt{TRAVEL}   & ADL & Ability to travel out of the neighbourhood \\[6pt]
+\multicolumn{3}{l}{\textit{Anthropometric and behavioural}} \\[2pt]
+\texttt{NACCBMI}  & Physical health & Body mass index at visit \\
+\texttt{TOBAC30}  & Substance use   & Tobacco use in the past 30 days (pack-years proxy) \\[6pt]
+\multicolumn{3}{l}{\textit{Social and sensory}} \\[2pt]
+\texttt{NACCLIVS} & Social          & Living situation (independent / assisted / dependent) \\
+\texttt{COMMUN}   & Social          & Ability to communicate with others \\
+\texttt{hearing}  & Sensory         & Composite hearing impairment score (derived from six NACC variables) \\
+\texttt{vision}   & Sensory         & Composite vision impairment score (derived from six NACC variables) \\[6pt]
+\multicolumn{3}{l}{\textit{Temporal reference}} \\[2pt]
+\texttt{months\_since\_baseline} & Follow-up & Elapsed months from the initial visit to each follow-up visit \\
+\end{longtable}
+
+The \texttt{hearing} composite is derived from \texttt{HEARING}, \texttt{HEARAID}, \texttt{HEARWAID} and the \texttt{vision} composite from \texttt{VISION}, \texttt{VISCORR}, \texttt{VISWCORR} in preprocessing.  Both range from 0 (no impairment) to 1 (severe impairment).
+
+% ============================================================
+\section{Longitudinal Feature Engineering}
+\label{sec:fe}
+% ============================================================
+
+Let $\mathcal{V}(x) = \{x_{i} : x_{i} \neq \texttt{NaN}\}$ denote the set of valid (non-missing) observations for variable $x$, ordered chronologically, and let $n = |\mathcal{V}(x)|$ be the number of valid visits.  Where time is referenced, $t_i$ denotes the elapsed months from baseline corresponding to the $i$-th valid observation.
+
+\subsection{Standard Summary Statistics}
+
+The following 9 statistics are computed for every longitudinal variable:
+
+\begin{align}
+\text{\textit{mean}} &= \frac{1}{n} \sum_{i=1}^{n} x_i \label{eq:mean}\\[4pt]
+\text{\textit{max}} &= \max_{i} x_i \\[4pt]
+\text{\textit{min}} &= \min_{i} x_i \\[4pt]
+\text{\textit{std}} &= \sqrt{\frac{1}{n-1}\sum_{i=1}^{n}(x_i - \bar{x})^2} \quad (n \geq 2, \text{ else } \texttt{NaN}) \\[4pt]
+\text{\textit{range}} &= \max_{i} x_i - \min_{i} x_i \\[4pt]
+\text{\textit{first}} &= x_1 \quad (\text{first valid observation}) \\[4pt]
+\text{\textit{last}} &= x_n \quad (\text{last valid observation}) \\[4pt]
+\text{\textit{last\_minus\_first}} &= x_n - x_1 \\[4pt]
+\text{\textit{n\_visits}} &= n
+\end{align}
+
+\subsection{Time-Normalised Slope}
+
+A key design decision is that slopes are computed against \emph{real elapsed time} (months), not visit index.  This means the slope is expressed in clinical units per month, making it comparable across patients with irregular visit spacing.
+
+\begin{equation}
+\text{\textit{slope}} = \hat{\beta}_1 \quad \text{from OLS: } x_i = \hat{\beta}_0 + \hat{\beta}_1 t_i + \varepsilon_i, \quad n \geq 2
+\label{eq:slope}
+\end{equation}
+
+When fewer than 2 valid observations exist, \textit{slope} is set to \texttt{NaN}.
+
+\subsection{Time-Normalised Acceleration}
+\label{subsec:acceleration}
+
+Acceleration captures the rate of change in the rate of change --- i.e., whether a patient is \emph{accelerating} into decline.
+
+Define the pairwise per-month slopes between consecutive valid visits:
+\begin{equation}
+s_i = \frac{x_{i+1} - x_i}{t_{i+1} - t_i}, \quad i = 1, \ldots, n-1
+\label{eq:pairwise_slopes}
+\end{equation}
+
+Acceleration is the OLS slope of $s_i$ regressed on the midpoint times $\tau_i = (t_i + t_{i+1})/2$:
+\begin{equation}
+\text{\textit{acceleration}} = \hat{\gamma}_1 \quad \text{from OLS: } s_i = \hat{\gamma}_0 + \hat{\gamma}_1 \tau_i + \varepsilon_i
+\label{eq:acceleration}
+\end{equation}
+
+\paragraph{Stability requirement.}  Acceleration is undefined and set to \texttt{NaN} for any patient with fewer than 4 valid observations (requiring $\geq 3$ pairwise slopes for a meaningful regression).  This threshold was raised from 3 to 4 valid visits to mitigate the instability of 2nd-derivative estimates from very short sequences.
+
+\subsection{Slope Variability (\textit{std\_slope})}
+\label{subsec:std_slope}
+
+A single linear slope cannot capture non-linear trajectories, step-changes, or periods of temporary recovery.  The standard deviation of pairwise per-month slopes quantifies this temporal variability:
+
+\begin{equation}
+\text{\textit{std\_slope}} = \text{std}(s_1, s_2, \ldots, s_{n-1}), \quad n \geq 2
+\label{eq:std_slope}
+\end{equation}
+
+where $s_i$ are defined as in Equation~\eqref{eq:pairwise_slopes} (using real elapsed months) and $\text{std}(\cdot)$ is the sample standard deviation ($\text{ddof}=1$).  When $n = 2$ exactly one slope exists, so $\text{\textit{std\_slope}} = 0$.  When $n < 2$, $\text{\textit{std\_slope}} = \texttt{NaN}$.
+
+\subsection{Maximum Percentage Change (\textit{pct\_change})}
+\label{subsec:pct_change}
+
+Alzheimer's progression can involve discrete step-changes following clinical events.  The maximum relative change between consecutive visits captures this:
+
+\begin{equation}
+\text{\textit{pct\_change}} = \max_{i \,:\, x_i \neq 0} \left| \frac{x_{i+1} - x_i}{x_i} \right|, \quad n \geq 2
+\label{eq:pct_change}
+\end{equation}
+
+Pairs where $x_i = 0$ are excluded from the maximum to prevent division-by-zero.  When all consecutive pairs involve a zero denominator, or $n < 2$, the feature is \texttt{NaN}.
+
+\subsection{Lagged Observations}
+\label{subsec:lags}
+
+Summary statistics such as mean and slope discard temporal ordering; two patients with the same mean and slope but different trajectories (``improved then worsened'' vs. ``worsened then improved'') are indistinguishable.  Lagged features resolve this by encoding the most recent visit values explicitly:
+
+\begin{equation}
+\text{\textit{lag}}_{k}(x) = x_{n-k}, \quad k \in \{1, 2, 3\}, \quad n \geq k + 1
+\label{eq:lag}
+\end{equation}
+
+So \textit{lag1} is the second-to-last valid observation, \textit{lag2} is the third-to-last, and \textit{lag3} is the fourth-to-last.  If insufficient valid observations exist, the lag is \texttt{NaN}.
+
+Lags are computed for 7 clinically prioritised variables: \texttt{NACCMMSE}, \texttt{CDRSUM}, \texttt{NACCGDS}, \texttt{hearing}, \texttt{vision}, \texttt{BILLS}, and \texttt{SHOPPING}, yielding 21 additional features.  These cover the primary cognitive screening instrument, global disease severity, depression, both sensory modalities, and two representative functional activity items.
+
+% ============================================================
+\section{Visit Timing Features}
+\label{sec:timing}
+% ============================================================
+
+The \texttt{months\_since\_baseline} column encodes the elapsed months from the initial visit to each subsequent visit.  Because this variable is the time axis itself, computing a slope or acceleration over it is not meaningful.  Instead, two features describing the \emph{spacing} of visits are extracted:
+
+\begin{align}
+\text{\textit{interval\_mean}} &= \frac{1}{n-1} \sum_{i=1}^{n-1} (t_{i+1} - t_i), \quad n \geq 2 \label{eq:interval_mean}\\[4pt]
+\text{\textit{interval\_std}} &= \text{std}\!\left(t_2 - t_1,\; t_3 - t_2,\; \ldots,\; t_n - t_{n-1}\right), \quad n \geq 3 \label{eq:interval_std}
+\end{align}
+
+\textit{interval\_mean} is simply the average time between assessments (months).  \textit{interval\_std} captures the \emph{irregularity} of the visit schedule.
+
+In addition, the standard summary statistics in Section~3.1 are also computed for \texttt{months\_since\_baseline} (mean, max, min, std, range, first, last, last\_minus\_first, n\_visits), so that features such as \textit{months\_since\_baseline\_last} (total follow-up duration) are available to the model.
+
+% ============================================================
+\section{Hearing $\times$ Vision Interaction Features}
+\label{sec:interactions}
+% ============================================================
+
+Dual sensory impairment --- concurrent hearing and vision loss --- is a well-documented risk factor for dementia, and its effect is reported to be multiplicative rather than additive \cite{cohenshaham2021}.  A model that treats hearing and vision as independent inputs cannot capture this synergy.  Three explicit interaction terms are therefore computed from the engineered \textit{last} values of each sensory composite:
+
+\begin{align}
+\text{\textit{hearing\_vision\_product}} &= \text{hearing\_last} \times \text{vision\_last} \label{eq:product}\\[4pt]
+\text{\textit{hearing\_vision\_sum}} &= \text{hearing\_last} + \text{vision\_last} \label{eq:sum}\\[4pt]
+\text{\textit{hearing\_vision\_mean}} &= \frac{\text{hearing\_last} + \text{vision\_last}}{2} \label{eq:mean_int}
+\end{align}
+
+The product term is zero if either sense is unimpaired and positive only when both are impaired, directly encoding the co-occurrence pattern.  The sum and mean terms capture overall sensory burden.
+
+% ============================================================
+\section{Full Feature Summary}
+\label{sec:summary}
+% ============================================================
+
+\subsection{Feature Count by Category}
+
+\begin{table}[h!]
+\centering
+\caption{Number of features by category in the final feature matrix passed to the XGBoost classifier.}
+\label{tab:feature_counts}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Category} & \textbf{Features per variable} & \textbf{Total features} \\
+\midrule
+Static (numeric + binary + categorical) & 1 & 18 \\
+\midrule
+Longitudinal summary (19 vars $\times$ 11 stats) & 11 & 209 \\
+\quad of which: standard summary & 9 & 171 \\
+\quad of which: time-normalised slope & 1 & 19 \\
+\quad of which: acceleration ($\geq$4 visits) & 1 & 19 \\
+\midrule
+Slope variability \textit{std\_slope} (19 vars) & 1 & 19 \\
+Maximum percentage change \textit{pct\_change} (19 vars) & 1 & 19 \\
+\midrule
+Visit timing features (\texttt{months\_since\_baseline}) & --- & 11 \\
+\quad standard summary (9 stats) & --- & 9 \\
+\quad interval mean / std & --- & 2 \\
+\midrule
+Lagged features (7 vars $\times$ 3 lags) & 3 & 21 \\
+\midrule
+Hearing $\times$ Vision interactions & --- & 3 \\
+\midrule
+\textbf{Total (approx.)} & & \textbf{$\approx$ 300} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent The exact count varies slightly depending on which columns are present in a given dataset split, since \texttt{preprocess\_data} filters to columns that actually exist.
+
+\subsection{Per-Longitudinal-Variable Feature Suffixes}
+
+For each of the 19 longitudinal variables $v$, the following named features are created:
+
+\begin{longtable}{@{}lll@{}}
+\toprule
+\textbf{Suffix} & \textbf{Formula} & \textbf{Min. visits required} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Suffix} & \textbf{Formula} & \textbf{Min. visits required} \\
+\midrule
+\endhead
+\bottomrule
+\endlastfoot
+\texttt{\_mean}              & $\bar{x}$                        & 1 \\
+\texttt{\_max}               & $\max x_i$                       & 1 \\
+\texttt{\_min}               & $\min x_i$                       & 1 \\
+\texttt{\_std}               & sample std of $x_i$              & 2 \\
+\texttt{\_range}             & $\max x_i - \min x_i$            & 1 \\
+\texttt{\_first}             & $x_1$                            & 1 \\
+\texttt{\_last}              & $x_n$                            & 1 \\
+\texttt{\_last\_minus\_first}& $x_n - x_1$                      & 1 \\
+\texttt{\_n\_visits}         & $n$                              & 1 \\
+\texttt{\_slope}             & OLS slope of $x$ on $t$ (months) & 2 \\
+\texttt{\_acceleration}      & OLS slope of $s_i$ on $\tau_i$   & \textbf{4} \\
+\texttt{\_std\_slope}        & std of $s_i$; 0 if $n=2$         & 2 \\
+\texttt{\_pct\_change}       & $\max |x_{i+1}-x_i|/|x_i|$      & 2 \\
+\texttt{\_lag1}              & $x_{n-1}$ (selected vars only)   & 2 \\
+\texttt{\_lag2}              & $x_{n-2}$ (selected vars only)   & 3 \\
+\texttt{\_lag3}              & $x_{n-3}$ (selected vars only)   & 4 \\
+\end{longtable}
+
+\subsection{Design Rationale}
+
+\paragraph{Visit-count independence.}  Because patients have differing numbers of visits, all features are summary statistics that collapse the visit dimension.  The model therefore generalises across patients with 2 visits and patients with 10 visits without requiring imputation or fixed-length padding.
+
+\paragraph{Time normalisation.}  All rate features (slope, acceleration, std\_slope) use actual elapsed time in months rather than visit index.  This ensures that a 10-point MMSE decline over 6 months is correctly distinguished from the same decline over 4 years, as the former is associated with a much more aggressive trajectory.
+
+\paragraph{Missing value handling.}  Features that require more observations than a patient has (e.g.\ acceleration requires $\geq 4$) are set to \texttt{NaN} rather than imputed.  XGBoost handles missing values natively through its learnable default branch direction at each split node.
+
+\paragraph{No scaling.}  The pipeline does not apply any standardisation or normalisation.  XGBoost is scale-invariant, and omitting scaling avoids any possibility of test-set information influencing training-set normalisation.
+
+\paragraph{Categorical encoding.}  The four categorical variables (\texttt{SEX}, \texttt{RACE}, \texttt{ALCOHOL}, \texttt{NACCNE4S}) are passed to XGBoost as \texttt{pandas} \texttt{category} dtype with \texttt{enable\_categorical=True}.  This activates XGBoost's native categorical split strategy (one-hot-optimal), which is both faster and more statistically appropriate than label encoding for unordered factors.
+
+\paragraph{No data leakage.}  \texttt{create\_delta\_features()} and \texttt{preprocess\_data()} are called independently within each cross-validation fold, including each LOO fold.  No statistics (means, scalers, imputers) are fit on the combined train+test data.
+
+% ============================================================
+\section{Target Variable Definition}
+\label{sec:target}
+% ============================================================
+
+A binary label $y \in \{0, 1\}$ is derived from each subject's \texttt{Progression} sequence --- a list of visit-level diagnostic codes where 0 = Cognitively Normal (CN), 1 = Mild Cognitive Impairment (MCI), and 2 = Alzheimer's Disease (AD).
+
+\begin{equation}
+y =
+\begin{cases}
+1 & \text{if } 2 \in \text{Progression} \quad (\text{progression type `AD'}) \\
+1 & \text{if } \exists\, v \in \text{Progression} : v > 0 \quad (\text{progression type `CN'}) \\
+0 & \text{otherwise}
+\end{cases}
+\label{eq:target}
+\end{equation}
+
+For the \textbf{CN cohort} (CN $\to$ MCI prediction), $y = 1$ if the subject ever progressed beyond cognitively normal.  For the \textbf{MCI/AD cohort} (MCI $\to$ AD prediction), $y = 1$ if the subject was ever diagnosed with AD.
+
+% ============================================================
+\section*{References}
+% ============================================================
+
+\begin{enumerate}[label={[\arabic*]}]
+    \item Cohen-Shaham, O., et al. (2021). Dual sensory impairment and risk of dementia: A systematic review and meta-analysis. \textit{Ageing Research Reviews}, 71, 101437.
+    \item Morris, J. C. (1993). The Clinical Dementia Rating (CDR): Current version and scoring rules. \textit{Neurology}, 43(11), 2412--2414.
+    \item Folstein, M. F., Folstein, S. E., \& McHugh, P. R. (1975). ``Mini-Mental State'': A practical method for grading the cognitive state of patients for the clinician. \textit{Journal of Psychiatric Research}, 12(3), 189--198.
+    \item Pfeffer, R. I., et al. (1982). Measurement of functional activities in older adults in the community. \textit{Journal of Gerontology}, 37(3), 323--329.
+    \item Yesavage, J. A., et al. (1982--83). Development and validation of a geriatric depression screening scale. \textit{Journal of Psychiatric Research}, 17(1), 37--49.
+\end{enumerate}
+
+\end{document}
