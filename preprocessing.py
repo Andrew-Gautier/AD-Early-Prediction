@@ -411,12 +411,12 @@ _LONG_COLS = [
     'BILLS', 'TAXES', 'SHOPPING', 'GAMES', 'STOVE',
     'MEALPREP', 'EVENTS', 'PAYATTN', 'REMDATES', 'TRAVEL',
     'HEARING', 'HEARAID', 'HEARWAID', 'VISION', 'VISCORR', 'VISWCORR',
-    'NACCLIVS', 'COMMUN',
+    'NACCLIVS', 'COMMUN', 'ALCOHOL'
 ]
 
 # Scalar columns — take the most-recent visit value
 _SCALAR_COLS = [
-    'SEX', 'EDUC', 'ALCOHOL', 'NACCFAM',
+    'SEX', 'EDUC', 'NACCFAM',
     'CVHATT', 'CVAFIB', 'DIABETES', 'HYPERCHO', 'HYPERTEN',
     'B12DEF', 'DEPD', 'ANX', 'NACCTBI', 'SMOKYRS', 'RACE', 'HISPANIC',
     'NACCNE4S',
@@ -694,10 +694,6 @@ def run_pipeline(
               f"{subject_df['n_visits'].max()} visits)")
 
     # ── Clean scalar sentinel values ──────────────────────────────────────
-    # ALCOHOL: keep ordinal; 9 (unknown) and -4 (not available) → NaN
-    if 'ALCOHOL' in subject_df.columns:
-        subject_df['ALCOHOL'] = subject_df['ALCOHOL'].replace([-4, 9], np.nan)
-
     # SMOKYRS: 888 = "not assessed", -4 = "not available" → NaN
     if 'SMOKYRS' in subject_df.columns:
         subject_df['SMOKYRS'] = subject_df['SMOKYRS'].replace([-4, 888], np.nan)
@@ -752,7 +748,8 @@ def run_pipeline(
         df['CDRSUM']   = df['CDRSUM'].apply(lambda r: _clean_sentinel(r, {-4}))
         df['TOBAC30']  = df['TOBAC30'].apply(lambda r: _clean_sentinel(r, {-4, 9}))
         df['NACCLIVS'] = df['NACCLIVS'].apply(lambda r: _clean_sentinel(r, {-4, 8, 9}))
-        df['COMMUN']   = df['COMMUN'].apply(lambda r: _clean_sentinel(r, {-4, 8, 9}))
+        df['ALCOHOL'] = df['ALCOHOL'].apply(lambda r: _clean_sentinel(r, {-4, 9}))
+        df['COMMUN'] = df['COMMUN'].apply(lambda r: _clean_sentinel(r, {-4, 9}))
         for col in FAQ_COLS:
             if col in df.columns:
                 df[col] = df[col].apply(lambda r: _clean_sentinel(r, {-4, 9, 8}))

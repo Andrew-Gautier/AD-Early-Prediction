@@ -9,7 +9,7 @@ from preprocessing import create_target
 LONGITUDINAL_COLUMNS = ['NACCBMI', 'NACCMMSE', 'NACCGDS', 'CDRSUM', 'TOBAC30',
     'BILLS', 'TAXES', 'SHOPPING', 'GAMES', 'STOVE',
     'MEALPREP', 'EVENTS', 'PAYATTN', 'REMDATES', 'TRAVEL',
-    'NACCLIVS', 'COMMUN', 'hearing', 'vision']  # 17 features
+    'NACCLIVS', 'COMMUN', 'hearing', 'vision', 'ALCOHOL', 'COMMUN']  # 19 features
 
 
 BINARY_COLUMNS = ['NACCFAM',
@@ -18,7 +18,7 @@ BINARY_COLUMNS = ['NACCFAM',
 
 NUMERIC_COLUMNS = ['EDUC', 'SMOKYRS', 'age']  
 
-CATEGORICAL_COLUMNS = ['ALCOHOL', 'SEX', 'RACE','NACCNE4S']  
+CATEGORICAL_COLUMNS = ['SEX', 'RACE','NACCNE4S']  
 
 # 37 features in the end. 
 def preprocess_data(df, progression_type):
@@ -32,7 +32,7 @@ def preprocess_data(df, progression_type):
     # Select features we want to keep
     # Static features (non-time-series)
     static_features = [
-        'SEX', 'EDUC', 'ALCOHOL', 'NACCFAM', 'CVHATT', 
+        'SEX', 'EDUC', 'NACCFAM', 'CVHATT', 
         'CVAFIB', 'DIABETES', 'HYPERCHO', 'HYPERTEN', 'B12DEF', 'DEPD', 
         'ANX', 'NACCTBI', 'SMOKYRS', 'RACE', 'age', 'HISPANIC', 'NACCNE4S'
     ]
@@ -340,6 +340,23 @@ def create_delta_features(df):
     new_columns = {}
 
     _parse_array_columns(df)
+
+    # ── ALCOHOL severity recode ───────────────────────────────────────────────
+    # Raw NACC coding:  0=Absent, 1=Recent/Active, 2=Remote/Inactive
+    # Problem: numeric order implies Remote/Inactive (2) > Recent/Active (1),
+    # which inverts clinical severity.
+    # Recode so that higher numbers always mean greater clinical concern:
+    #   0 (Absent)          → 0
+    #   2 (Remote/Inactive) → 1
+    #   1 (Recent/Active)   → 2   ← most severe
+    # A positive slope now correctly means worsening abuse history.
+    _ALCOHOL_RECODE = {0.0: 0.0, 1.0: 2.0, 2.0: 1.0}
+    if 'ALCOHOL' in df.columns and _is_numeric_list_col(df['ALCOHOL']):
+        df['ALCOHOL'] = df['ALCOHOL'].apply(
+            lambda lst: [_ALCOHOL_RECODE.get(v, v) if not (isinstance(v, float) and np.isnan(v)) else np.nan
+                         for v in lst]
+            if isinstance(lst, list) else lst
+        )
 
     # Extract months_since_baseline as a companion series for time-normalized slopes.
     # It is itself a list column and will be processed (interval stats) inside

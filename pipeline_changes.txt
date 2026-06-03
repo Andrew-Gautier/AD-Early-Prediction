@@ -41,3 +41,6 @@ Removing RFECV and not implementing MCTS for now. One large overhaul is needed, 
 Some smaller changes needed
 visualization - SHAP variable charts. 
 switching objective function to PR-ROC instead of AUROC. 
+
+06-03-26
+- ALCOHOL is changed to a numeric longitudinal. 
