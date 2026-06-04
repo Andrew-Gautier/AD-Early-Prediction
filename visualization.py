@@ -2,7 +2,14 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.metrics import confusion_matrix, roc_curve, roc_auc_score
+import shap
+from sklearn.metrics import (
+    confusion_matrix,
+    roc_curve,
+    roc_auc_score,
+    precision_recall_curve,
+    average_precision_score,
+)
 
 
 
@@ -119,3 +126,87 @@ def plot_roc(y_true, y_proba, title=None, save_path=None):
     plt.show()
 
     return fpr, tpr, auc_val
+
+
+def plot_pr_curve(y_true, y_proba, title=None, save_path=None):
+    """Publication-quality Precision-Recall curve with Average Precision annotation.
+
+    Parameters
+    ----------
+    y_true : array-like
+        True binary labels.
+    y_proba : array-like
+        Predicted probabilities for the positive class.
+    title : str, optional
+        Custom plot title.
+    save_path : str, optional
+        If provided, save the figure to this path.
+    """
+    precision, recall, _ = precision_recall_curve(y_true, y_proba)
+    ap = average_precision_score(y_true, y_proba)
+    baseline = np.mean(y_true)
+
+    fig, ax = plt.subplots(figsize=(7, 6))
+    ax.plot(recall, precision, color='#E84855', lw=2.5, label=f'PR curve (AP = {ap:.3f})')
+    ax.axhline(baseline, color='k', linestyle='--', lw=1, alpha=0.5, label=f'Random classifier (AP = {baseline:.3f})')
+    ax.fill_between(recall, precision, alpha=0.15, color='#E84855')
+    ax.set_xlim([-0.02, 1.02])
+    ax.set_ylim([-0.02, 1.02])
+    ax.set_xlabel('Recall', fontsize=12)
+    ax.set_ylabel('Precision', fontsize=12)
+    ax.set_title(title or 'Precision-Recall Curve', fontsize=14, fontweight='bold')
+    ax.legend(loc='upper right', fontsize=11, framealpha=0.9)
+    ax.spines[['top', 'right']].set_visible(False)
+    ax.grid(alpha=0.3, linestyle='--')
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.show()
+
+    return precision, recall, ap
+
+
+def plot_shap_summary(model, X_train, feature_names, max_display=20, title=None, save_path=None):
+    """SHAP beeswarm summary plot using TreeExplainer (computed on training data).
+
+    Parameters
+    ----------
+    model : fitted XGBClassifier
+        The trained model to explain.
+    X_train : np.ndarray
+        Training feature matrix (the data SHAP values are computed on).
+    feature_names : list[str]
+        Feature names corresponding to columns of X_train.
+    max_display : int
+        Maximum number of features to display (sorted by mean |SHAP|).
+    title : str, optional
+        Custom plot title (rendered as a suptitle).
+    save_path : str, optional
+        If provided, save the figure to this path.
+
+    Returns
+    -------
+    shap_values : np.ndarray
+        SHAP values array of shape (n_samples, n_features).
+    explainer : shap.TreeExplainer
+    """
+    explainer = shap.TreeExplainer(model)
+    shap_values = explainer.shap_values(X_train)
+
+    # shap.summary_plot manages its own figure; use show=False so we can save
+    shap.summary_plot(
+        shap_values,
+        X_train,
+        feature_names=feature_names,
+        max_display=max_display,
+        show=False,
+    )
+    fig = plt.gcf()
+    if title:
+        fig.suptitle(title, fontsize=14, fontweight='bold', y=1.01)
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.show()
+
+    return shap_values, explainer

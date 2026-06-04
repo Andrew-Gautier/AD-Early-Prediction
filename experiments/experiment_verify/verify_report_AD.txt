@@ -1,0 +1,39 @@
+Dataset base: verify
+Progression type: AD
+Objective metric: auc
+n_trials: 5
+Best hyperparameters:
+  n_estimators: 114
+  max_depth: 5
+  learning_rate: 0.0324996905539195
+  subsample: 0.9983418030910773
+  colsample_bytree: 0.7075000847667088
+  colsample_bylevel: 0.7256844834543996
+  colsample_bynode: 0.5823828085859478
+  min_child_weight: 2
+  gamma: 0.6818058335002728
+  reg_alpha: 0.003265173647205977
+  reg_lambda: 0.0014292848535061562
+  max_delta_step: 0
+
+Classification Report:
+              precision    recall  f1-score   support
+
+           0       0.79      0.84      0.81       279
+           1       0.83      0.78      0.81       288
+
+    accuracy                           0.81       567
+   macro avg       0.81      0.81      0.81       567
+weighted avg       0.81      0.81      0.81       567
+
+
+Base ROC AUC: 0.9013
+PR-AUC (Average Precision): 0.9188
+Bootstrap 95% CI (n=1000, valid_samples=1000/1000):
+- Accuracy: 0.808 (CI: 0.774, 0.838) range=0.064
+- Precision (macro): 0.809 (CI: 0.776, 0.840) range=0.064
+- Recall (macro): 0.808 (CI: 0.775, 0.838) range=0.063
+- F1 (macro): 0.808 (CI: 0.774, 0.838) range=0.064
+- ROC AUC: 0.901 (CI: 0.875, 0.925) range=0.050
+- PPV: 0.830 (CI: 0.786, 0.875) range=0.089
+- NPV: 0.787 (CI: 0.740, 0.831) range=0.091

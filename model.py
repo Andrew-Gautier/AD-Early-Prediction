@@ -5,6 +5,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import (
     classification_report,
     roc_auc_score,
+    average_precision_score,
     accuracy_score,
     precision_score,
     recall_score,
@@ -12,9 +13,8 @@ from sklearn.metrics import (
 )
 from xgboost import XGBClassifier
 import os
-import itertools
 import joblib
-from joblib import Parallel, delayed
+import optuna
 try:
     from tqdm import tqdm
 except ImportError:
@@ -22,6 +22,13 @@ except ImportError:
         return iterable
 from preprocessing import create_target
 from feature_engineering import create_delta_features, preprocess_data
+
+# XGBoost hyperparameter keys that optuna_search / _fit_xgb understand
+_XGB_HPARAM_KEYS = {
+    'n_estimators', 'max_depth', 'learning_rate', 'subsample',
+    'colsample_bytree', 'colsample_bylevel', 'colsample_bynode',
+    'min_child_weight', 'gamma', 'reg_alpha', 'reg_lambda', 'max_delta_step',
+}
 
 def bootstrap_all_metrics_ci(
     y_true,
@@ -34,7 +41,7 @@ def bootstrap_all_metrics_ci(
     max_attempts=10000,
     verbose=True,
 ):
-    """Bootstrap CIs for accuracy, precision (macro), recall (macro), F1 (macro), and ROC AUC.
+    """Bootstrap CIs for accuracy, precision (macro), recall (macro), F1 (macro), ROC AUC, PPV, and NPV.
 
     Keeps sampling until n_boot valid (both-class) resamples are collected, up to max_attempts.
     Returns a dict including a 'valid_samples' key showing how many attempts were needed:
@@ -44,6 +51,8 @@ def bootstrap_all_metrics_ci(
         'recall_macro': (point, (lo, hi)),
         'f1_macro': (point, (lo, hi)),
         'auc': (point, (lo, hi)),
+        'ppv': (point, (lo, hi)),
+        'npv': (point, (lo, hi)),
         'valid_samples': 'n_boot/total_attempts'  # e.g. '1000/1050'
       }
     """
@@ -58,12 +67,15 @@ def bootstrap_all_metrics_ci(
     prec_pt = precision_score(y_true, y_pred, average="macro", zero_division=0)
     rec_pt = recall_score(y_true, y_pred, average="macro", zero_division=0)
     f1_pt = f1_score(y_true, y_pred, average="macro", zero_division=0)
+    ppv_pt = precision_score(y_true, y_pred, pos_label=1, average="binary", zero_division=0)
+    npv_pt = precision_score(y_true, y_pred, pos_label=0, average="binary", zero_division=0)
     auc_pt = np.nan
     if len(np.unique(y_true)) == 2:
         auc_pt = roc_auc_score(y_true, y_score)
 
     # Bootstrap arrays
     acc_b, prec_b, rec_b, f1_b = [], [], [], []
+    ppv_b, npv_b = [], []
     auc_b = []
     n = len(y_true)
     total_attempts = 0
@@ -87,6 +99,8 @@ def bootstrap_all_metrics_ci(
         prec_b.append(precision_score(bt_y, bt_pred, average="macro", zero_division=0))
         rec_b.append(recall_score(bt_y, bt_pred, average="macro", zero_division=0))
         f1_b.append(f1_score(bt_y, bt_pred, average="macro", zero_division=0))
+        ppv_b.append(precision_score(bt_y, bt_pred, pos_label=1, average="binary", zero_division=0))
+        npv_b.append(precision_score(bt_y, bt_pred, pos_label=0, average="binary", zero_division=0))
 
         try:
             auc_b.append(roc_auc_score(bt_y, bt_score))
@@ -98,6 +112,8 @@ def bootstrap_all_metrics_ci(
             prec_b.pop()
             rec_b.pop()
             f1_b.pop()
+            ppv_b.pop()
+            npv_b.pop()
 
     valid_samples_str = f"{len(auc_b)}/{total_attempts}"
 
@@ -118,6 +134,8 @@ def bootstrap_all_metrics_ci(
         "recall_macro": (rec_pt, ci_bounds(rec_b) if rec_b else (np.nan, np.nan)),
         "f1_macro": (f1_pt, ci_bounds(f1_b) if f1_b else (np.nan, np.nan)),
         "auc": (auc_pt, ci_bounds(auc_b) if auc_b else (np.nan, np.nan)),
+        "ppv": (ppv_pt, ci_bounds(ppv_b) if ppv_b else (np.nan, np.nan)),
+        "npv": (npv_pt, ci_bounds(npv_b) if npv_b else (np.nan, np.nan)),
         "valid_samples": valid_samples_str,
     }
 
@@ -131,6 +149,9 @@ def _fit_xgb(X_tr, X_te, y_tr, params, n_jobs=None, scale=False):
 
     Parameters
     ----------
+    params : dict
+        Hyperparameter dict. All keys in _XGB_HPARAM_KEYS are forwarded to
+        XGBClassifier; unrecognised keys are ignored.
     scale : bool, default False
         When True, apply StandardScaler to X_tr / X_te before fitting.
 
@@ -151,18 +172,16 @@ def _fit_xgb(X_tr, X_te, y_tr, params, n_jobs=None, scale=False):
     n_pos = int((y_tr == 1).sum())
     spw = n_neg / n_pos if n_pos > 0 else 1.0
 
+    xgb_kwargs = {k: v for k, v in params.items() if k in _XGB_HPARAM_KEYS}
+
     model = XGBClassifier(
         objective='binary:logistic',
         eval_metric='auc',
-        n_estimators=params['n_estimators'],
-        max_depth=params['max_depth'],
-        learning_rate=params['learning_rate'],
-        subsample=params['subsample'],
-        colsample_bytree=params['colsample_bytree'],
         scale_pos_weight=spw,
         enable_categorical=True,
         n_jobs=n_jobs,
         random_state=42,
+        **xgb_kwargs,
     )
     model.fit(X_tr_proc, y_tr)
     y_proba = model.predict_proba(X_te_proc)[:, 1]
@@ -177,6 +196,8 @@ def _print_bootstrap_ci(metrics):
     rec_pt,  (rec_lo,  rec_hi)  = metrics["recall_macro"]
     f1_pt,   (f1_lo,   f1_hi)   = metrics["f1_macro"]
     auc_pt,  (auc_lo,  auc_hi)  = metrics["auc"]
+    ppv_pt,  (ppv_lo,  ppv_hi)  = metrics["ppv"]
+    npv_pt,  (npv_lo,  npv_hi)  = metrics["npv"]
 
     print(f"\nBootstrap 95% CI (n=1000, valid_samples={metrics['valid_samples']}):")
     print(f"- Accuracy: {acc_pt:.3f} (CI: {acc_lo:.3f}, {acc_hi:.3f}) range={acc_hi - acc_lo:.3f}")
@@ -187,6 +208,8 @@ def _print_bootstrap_ci(metrics):
         print(f"- ROC AUC: {auc_pt:.3f} (CI: {auc_lo:.3f}, {auc_hi:.3f}) range={auc_hi - auc_lo:.3f}")
     else:
         print(f"- ROC AUC: {auc_pt:.3f} (CI unavailable; too few valid resamples)")
+    print(f"- PPV: {ppv_pt:.3f} (CI: {ppv_lo:.3f}, {ppv_hi:.3f}) range={ppv_hi - ppv_lo:.3f}")
+    print(f"- NPV: {npv_pt:.3f} (CI: {npv_lo:.3f}, {npv_hi:.3f}) range={npv_hi - npv_lo:.3f}")
 
 
 def _write_bootstrap_ci(f, bm):
@@ -201,19 +224,27 @@ def _write_bootstrap_ci(f, bm):
         f.write(f"- ROC AUC: {bm['auc'][0]:.3f} (CI: {auc_lo:.3f}, {auc_hi:.3f}) range={auc_hi - auc_lo:.3f}\n")
     else:
         f.write(f"- ROC AUC: {bm['auc'][0]:.3f} (CI unavailable; too few valid resamples)\n")
+    f.write(f"- PPV: {bm['ppv'][0]:.3f} (CI: {bm['ppv'][1][0]:.3f}, {bm['ppv'][1][1]:.3f}) range={bm['ppv'][1][1] - bm['ppv'][1][0]:.3f}\n")
+    f.write(f"- NPV: {bm['npv'][0]:.3f} (CI: {bm['npv'][1][0]:.3f}, {bm['npv'][1][1]:.3f}) range={bm['npv'][1][1] - bm['npv'][1][0]:.3f}\n")
 
 # For the training of the best model with the best set of hyperparameters, prints out the whole performance report.
-def build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_names):
-    
+def build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_names, charts_dir=None):
+
+    from visualization import plot_shap_summary, plot_pr_curve
+
     model, imputer, scaler, y_pred, y_proba = _fit_xgb(X_train, X_test, y_train, model_dict)
-    
+
     print("Classification Report:")
     cr_str = classification_report(y_test, y_pred)
     print(cr_str)
-    
+
     # Base ROC AUC
     base_auc = roc_auc_score(y_test, y_proba)
     print(f"\nROC AUC Score: {base_auc:.4f}")
+
+    # Base PR-AUC
+    base_avg_precision = average_precision_score(y_test, y_proba)
+    print(f"PR-AUC (Average Precision): {base_avg_precision:.4f}")
 
     # Bootstrap CIs for all metrics
     metrics = bootstrap_all_metrics_ci(
@@ -228,71 +259,83 @@ def build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_name
 
     _print_bootstrap_ci(metrics)
 
+    # SHAP analysis on training data
+    shap_save = os.path.join(charts_dir, "shap_summary.png") if charts_dir else None
+    shap_values, _ = plot_shap_summary(
+        model, X_train, list(feature_names), save_path=shap_save
+    )
+
+    # PR curve on test data
+    pr_save = os.path.join(charts_dir, "pr_curve.png") if charts_dir else None
+    plot_pr_curve(y_test, y_proba, save_path=pr_save)
+
     summary = {
         "classification_report": cr_str,
         "base_auc": float(base_auc),
+        "base_avg_precision": float(base_avg_precision),
         "bootstrap_metrics": metrics,
         "y_true": y_test,
         "y_proba": y_proba,
         "y_pred": y_pred,
         "feature_names": list(feature_names),
         "feature_importances": model.feature_importances_,
+        "shap_values": shap_values,
+        "X_train": X_train,
     }
     return model, feature_names, imputer, scaler, summary
 
-# To train models for cross-validation. Returns only AUC score. Does not print out anything.
-def build_model(X_train, X_test, y_train, y_test, model_dict, feature_names, xgb_n_jobs=None):
-    
-    _, _, _, _, y_proba = _fit_xgb(X_train, X_test, y_train, model_dict, n_jobs=xgb_n_jobs)
+# To train models for cross-validation. Returns only a CV score. Does not print out anything.
+def build_model(X_train, X_test, y_train, y_test, model_dict, feature_names, xgb_n_jobs=None, objective_metric='auc'):
+
+    _, _, _, y_pred, y_proba = _fit_xgb(X_train, X_test, y_train, model_dict, n_jobs=xgb_n_jobs)
+    if objective_metric == 'avg_precision':
+        return average_precision_score(y_test, y_proba)
     return roc_auc_score(y_test, y_proba)
 
 
-def _eval_skf_combo(combo, list_x_train, list_x_test, list_y_train, list_y_test, n_splits, feature_names):
-    """Evaluate one hyperparameter combo across K folds. Returns result tuple."""
-    n_estimators, max_depth, learning_rate, subsample, colsample_bytree = combo
-    model_dict = {
-        'n_estimators': n_estimators,
-        'max_depth': max_depth,
-        'learning_rate': learning_rate,
-        'subsample': subsample,
-        'colsample_bytree': colsample_bytree,
-    }
-    score_sum = 0
-    for i in range(n_splits):
-        score_sum += build_model(
-            list_x_train[i], list_x_test[i],
-            list_y_train[i], list_y_test[i],
-            model_dict, feature_names,
-            xgb_n_jobs=1,
-        )
-    score = score_sum / n_splits
-    return (n_estimators, max_depth, learning_rate, subsample, colsample_bytree, score)
+def _suggest_param(trial, name, spec):
+    """Translate a params-dict entry into an Optuna trial suggestion.
+
+    spec conventions:
+      scalar                    -> fixed value (no suggestion)
+      (int_lo, int_hi)          -> trial.suggest_int
+      (float_lo, float_hi)      -> trial.suggest_float
+      (float_lo, float_hi, 'log') -> trial.suggest_float(..., log=True)
+    """
+    if not isinstance(spec, tuple):
+        return spec
+    if len(spec) == 3 and spec[2] == 'log':
+        return trial.suggest_float(name, spec[0], spec[1], log=True)
+    lo, hi = spec[0], spec[1]
+    if isinstance(lo, int) and isinstance(hi, int):
+        return trial.suggest_int(name, lo, hi)
+    return trial.suggest_float(name, lo, hi)
 
 
-# Perform grid search with the training dataset and the given parameter ranges.
-# Return the set of best hyperparameters and save cross-validation scores to the given csv path.
-# A helper method for train_best_model(...)
-# n_jobs       : number of parallel workers for evaluating hyperparameter combos (1 = serial)
+def optuna_search(
+    x, y, params, csv_path, feature_names,
+    n_trials=100, n_jobs=1, objective_metric='auc',
+):
+    """Bayesian hyperparameter search using Optuna (TPESampler).
 
-def grid_search(x, y, param_grid, csv_path, feature_names, cv_method='skf', n_jobs=1, df_raw=None, progression_type=None):
-    best_hyperparameters = None
-    best_score = 0
+    params dict convention:
+      scalar value              -> fixed hyperparameter
+      (int_lo, int_hi)          -> suggest_int search range
+      (float_lo, float_hi)      -> suggest_float search range
+      (float_lo, float_hi, 'log') -> suggest_float log-scale search range
 
-    combo_keys = ['n_estimators', 'max_depth', 'learning_rate', 'subsample', 'colsample_bytree']
-    all_combos = list(itertools.product(*(param_grid[k] for k in combo_keys)))
-    total_combos = len(all_combos)
+    Supported hyperparameter keys (subset of _XGB_HPARAM_KEYS):
+      n_estimators, max_depth, learning_rate, subsample, colsample_bytree,
+      colsample_bylevel, colsample_bynode, min_child_weight, gamma,
+      reg_alpha, reg_lambda, max_delta_step
 
-    # ── StratifiedKFold branch ───────────────────────────────────────────────────
-    #else:
+    Returns the best hyperparameter dict and saves per-trial scores to csv_path.
+    """
     y_arr = np.array(y)
-    list_x_train = []
-    list_x_test = []
-    list_y_train = []
-    list_y_test = []
+
     # Determine feasible n_splits based on minority class count
     if np.unique(y_arr).size == 2:
-        class_counts = np.bincount(y_arr)
-        min_class = int(class_counts.min())
+        min_class = int(np.bincount(y_arr).min())
     else:
         min_class = len(y_arr)
     n_splits = max(2, min(5, min_class))
@@ -302,39 +345,62 @@ def grid_search(x, y, param_grid, csv_path, feature_names, cv_method='skf', n_jo
         print(f"Using StratifiedKFold with n_splits={n_splits}")
 
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
-    for i, (train_ind, test_ind) in enumerate(skf.split(x, y_arr)):
-        list_x_train.append(x[train_ind])
-        list_y_train.append(y_arr[train_ind])
-        list_x_test.append(x[test_ind])
-        list_y_test.append(y_arr[test_ind])
+    folds = [
+        (x[tr], x[te], y_arr[tr], y_arr[te])
+        for tr, te in skf.split(x, y_arr)
+    ]
 
-    print(f"Grid search: {total_combos} hyperparameter combinations (n_jobs={n_jobs})")
+    trial_records = []
 
-    results = Parallel(n_jobs=n_jobs, return_as='generator')(
-        delayed(_eval_skf_combo)(combo, list_x_train, list_x_test, list_y_train, list_y_test, n_splits, feature_names)
-        for combo in all_combos
-    )
-    scores = []
-    with tqdm(total=total_combos, desc="SKF grid search", unit="combo") as pbar:
-        for result in results:
-            scores.append(list(result))
-            if result[5] > best_score:
-                best_score = result[5]
-                best_hyperparameters = dict(zip(combo_keys, result[:5]))
+    def objective(trial):
+        trial_params = {k: _suggest_param(trial, k, v) for k, v in params.items()}
+        score_sum = sum(
+            build_model(
+                X_tr, X_te, y_tr, y_te,
+                trial_params, feature_names,
+                xgb_n_jobs=1,
+                objective_metric=objective_metric,
+            )
+            for X_tr, X_te, y_tr, y_te in folds
+        )
+        return score_sum / n_splits
+
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    study = optuna.create_study(direction='maximize', sampler=optuna.samplers.TPESampler(seed=42))
+
+    print(f"Optuna search: {n_trials} trials, objective={objective_metric}, n_jobs={n_jobs}")
+    with tqdm(total=n_trials, desc="Optuna trials", unit="trial") as pbar:
+        def _cb(study, trial):
+            record = {'trial': trial.number, 'score': trial.value}
+            record.update(trial.params)
+            trial_records.append(record)
             pbar.update(1)
 
-    # ensure directory exists and save the cross validations scores as csv
+        study.optimize(objective, n_trials=n_trials, n_jobs=n_jobs, callbacks=[_cb])
+
+    # Save per-trial results
     dirn = os.path.dirname(csv_path)
     if dirn:
         os.makedirs(dirn, exist_ok=True)
-    pd.DataFrame(scores, columns=["n_estimators", "max_depth", "learning_rate", "subsample", "colsample_bytree", "avg AUC score"]).to_csv(csv_path, index=False)
-    return best_hyperparameters
+    pd.DataFrame(trial_records).to_csv(csv_path, index=False)
 
-# Input an unprocessed dataset, progression type for preprocessing, and the parameter ranges 
-# to get a best performing model with the best set of hyperparameters found from grid-search.
-# Save cross-validation scores to the input new csv path.
+    best = study.best_params
+    # Fill in any fixed params that weren't part of the search
+    for k, v in params.items():
+        if not isinstance(v, tuple) and k not in best:
+            best[k] = v
+    return best
 
-def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="saved_models", model_base_name=None, save_artifacts=True, n_jobs=1):
+# Input an unprocessed dataset, progression type for preprocessing, and the parameter search space
+# to get a best performing model with the best set of hyperparameters found from Bayesian optimization.
+# Save per-trial scores to the input csv path.
+
+def train_best_model(
+    dataset, progression_type, params, csv_path,
+    save_dir="saved_models", model_base_name=None,
+    save_artifacts=True, n_jobs=1,
+    n_trials=100, objective_metric='auc',
+):
     
     dataset = dataset.copy()
 
@@ -373,11 +439,18 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
     y_train = processed_train['target'].values
     y_test = processed_test['target'].values
 
-    # --- Step 3: Grid search ---
-    model_dict = grid_search(X_train, y_train, param_grid, csv_path, feature_names, n_jobs=n_jobs)
+    # --- Step 3: Bayesian hyperparameter search ---
+    model_dict = optuna_search(
+        X_train, y_train, params, csv_path, feature_names,
+        n_trials=n_trials, n_jobs=n_jobs, objective_metric=objective_metric,
+    )
 
     # --- Step 4: Final model with full report ---
-    model, columns, imputer, scaler, summary = build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_names)
+    charts_dir = save_dir if save_artifacts else None
+    model, columns, imputer, scaler, summary = build_model_final(
+        X_train, X_test, y_train, y_test, model_dict, feature_names,
+        charts_dir=charts_dir,
+    )
 
     try:
         model.feature_names_in_ = np.array(columns)
@@ -404,14 +477,15 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
         with open(report_path, "w") as f:
             f.write(f"Dataset base: {base}\n")
             f.write(f"Progression type: {progression_type}\n")
-            f.write(f"CV method: {'skf' }\n")
+            f.write(f"Objective metric: {objective_metric}\n")
+            f.write(f"n_trials: {n_trials}\n")
             f.write("Best hyperparameters:\n")
-            for k, v in model.get_params().items():
-                if k in ["n_estimators", "max_depth", "learning_rate", "subsample", "colsample_bytree", "random_state", "objective", "eval_metric"]:
-                    f.write(f"  {k}: {v}\n")
+            for k, v in model_dict.items():
+                f.write(f"  {k}: {v}\n")
             f.write("\nClassification Report:\n")
             f.write(summary["classification_report"] + "\n")
             f.write(f"\nBase ROC AUC: {summary['base_auc']:.4f}\n")
+            f.write(f"PR-AUC (Average Precision): {summary['base_avg_precision']:.4f}\n")
             bm = summary["bootstrap_metrics"]
             _write_bootstrap_ci(f, bm)
         print(f"- Report:  {report_path}")
