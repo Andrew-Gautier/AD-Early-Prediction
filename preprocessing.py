@@ -614,20 +614,33 @@ def _cn_starting_indices(df):
     return idx
 
 def _detect_reverters(df, task):
+    
     """Return iloc indices of reverters.
     task='CN_MCI': progressor (Prog_ID=1) ending at 0.
     task='MCI_AD': progressor (Prog_ID=1) ending at 1.
     """
-    end_label = 0 if task == 'CN_MCI' else 1
-    idx = []
-    for i, (_, r) in enumerate(df.iterrows()):
-        prog = _get_progression(r)
-        pid = r['Prog_ID']
-        if isinstance(pid, str):
-            pid = eval(pid)
-        if pid == 1 and prog[-1] == end_label:
-            idx.append(i)
-    return idx
+    if task == 'CN_MCI':
+        end_label = 0
+        idx = []
+        for i, (_, r) in enumerate(df.iterrows()):
+            prog = _get_progression(r)
+            pid = r['Prog_ID']
+            if isinstance(pid, str):
+                pid = eval(pid)
+            if pid == 1 and prog[-1] == end_label:
+                idx.append(i)
+        return idx
+    elif task == 'MCI_AD':
+        idx = []
+        for i, (_, r) in enumerate(df.iterrows()):
+            prog = _get_progression(r)
+            pid = r['Prog_ID']
+            if isinstance(pid, str):
+                pid = eval(pid)
+            if pid == 1 and (prog[-1] == 1 or prog[-1] == 0):
+                idx.append(i)
+        return idx
+    
 
 
 # ── Main pipeline ──────────────────────────────────────────────────────────────

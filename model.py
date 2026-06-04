@@ -1,8 +1,7 @@
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split, StratifiedKFold
-from sklearn.feature_selection import RFECV
-from sklearn.preprocessing import StandardScaler, OrdinalEncoder
+from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import (
     classification_report,
     roc_auc_score,
@@ -23,7 +22,7 @@ except ImportError:
     def tqdm(iterable, **kwargs):
         return iterable
 from preprocessing import create_target
-from feature_engineering import create_delta_features, preprocess_data, CATEGORICAL_COLUMNS
+from feature_engineering import create_delta_features, preprocess_data
 
 def bootstrap_all_metrics_ci(
     y_true,
@@ -205,26 +204,26 @@ def _write_bootstrap_ci(f, bm):
         f.write(f"- ROC AUC: {bm['auc'][0]:.3f} (CI unavailable; too few valid resamples)\n")
 
 
-def _run_loocv_folds(df, combo, progression_type, n_jobs, desc, tqdm_position=None):
-    """Run all LOO folds for one combo; returns list of fold result tuples."""
-    n_samples = len(df)
-    pos_kwargs = {"position": tqdm_position} if tqdm_position is not None else {}
-    if n_jobs == 1:
-        return [
-            _loocv_fold(i, df, combo, progression_type)
-            for i in tqdm(range(n_samples), desc=desc, unit="fold", leave=False, **pos_kwargs)
-        ]
-    return list(tqdm(
-        Parallel(n_jobs=n_jobs, return_as='generator')(
-            delayed(_loocv_fold)(i, df, combo, progression_type)
-            for i in range(n_samples)
-        ),
-        total=n_samples,
-        desc=desc,
-        unit="fold",
-        leave=False,
-        **pos_kwargs,
-    ))
+# def _run_loocv_folds(df, combo, progression_type, n_jobs, desc, tqdm_position=None):
+#     """Run all LOO folds for one combo; returns list of fold result tuples."""
+#     n_samples = len(df)
+#     pos_kwargs = {"position": tqdm_position} if tqdm_position is not None else {}
+#     if n_jobs == 1:
+#         return [
+#             _loocv_fold(i, df, combo, progression_type)
+#             for i in tqdm(range(n_samples), desc=desc, unit="fold", leave=False, **pos_kwargs)
+#         ]
+#     return list(tqdm(
+#         Parallel(n_jobs=n_jobs, return_as='generator')(
+#             delayed(_loocv_fold)(i, df, combo, progression_type)
+#             for i in range(n_samples)
+#         ),
+#         total=n_samples,
+#         desc=desc,
+#         unit="fold",
+#         leave=False,
+#         **pos_kwargs,
+#     ))
 
 
 # For the training of the best model with the best set of hyperparameters, prints out the whole performance report.
@@ -272,143 +271,143 @@ def build_model(X_train, X_test, y_train, y_test, model_dict, feature_names, xgb
     return roc_auc_score(y_test, y_proba)
 
 
-def _loocv_fold(fold_idx, df_with_target, hyperparams, progression_type):
-    """Run one LOO fold from raw data through prediction.
+# def _loocv_fold(fold_idx, df_with_target, hyperparams, progression_type):
+#     """Run one LOO fold from raw data through prediction.
 
-    The full pipeline (delta features -> preprocess -> impute/scale -> XGBoost)
-    is executed per fold.
+#     The full pipeline (delta features -> preprocess -> impute/scale -> XGBoost)
+#     is executed per fold.
 
-    Returns (true_label, predicted_proba, predicted_class).
-    """
-    warnings.filterwarnings('ignore')
-    n_est, max_depth, lr, subsample, colsample = hyperparams
+#     Returns (true_label, predicted_proba, predicted_class).
+#     """
+#     warnings.filterwarnings('ignore')
+#     n_est, max_depth, lr, subsample, colsample = hyperparams
 
-    # 1. train / test split
-    all_idx = list(range(len(df_with_target)))
-    train_idx = all_idx[:fold_idx] + all_idx[fold_idx + 1:]
-    df_train = df_with_target.iloc[train_idx].copy()
-    df_test  = df_with_target.iloc[[fold_idx]].copy()
-    true_label = int(df_test['target'].iloc[0])
+#     # 1. train / test split
+#     all_idx = list(range(len(df_with_target)))
+#     train_idx = all_idx[:fold_idx] + all_idx[fold_idx + 1:]
+#     df_train = df_with_target.iloc[train_idx].copy()
+#     df_test  = df_with_target.iloc[[fold_idx]].copy()
+#     true_label = int(df_test['target'].iloc[0])
 
-    # 3. Separate targets, drop from DataFrames
-    y_tr = df_train['target'].values
-    y_te_val = df_test['target'].values
-    df_train = df_train.drop(columns=['target'])
-    df_test  = df_test.drop(columns=['target'])
+#     # 3. Separate targets, drop from DataFrames
+#     y_tr = df_train['target'].values
+#     y_te_val = df_test['target'].values
+#     df_train = df_train.drop(columns=['target'])
+#     df_test  = df_test.drop(columns=['target'])
 
-    # 4. Feature engineering
-    df_train = create_delta_features(df_train)
-    df_test  = create_delta_features(df_test)
+#     # 4. Feature engineering
+#     df_train = create_delta_features(df_train)
+#     df_test  = create_delta_features(df_test)
 
-    # 5. Re-attach targets for preprocess_data
-    df_train['target'] = y_tr
-    df_test['target']  = y_te_val
-    processed_train, _, _ = preprocess_data(df_train, progression_type)
-    processed_test,  _, _ = preprocess_data(df_test, progression_type)
+#     # 5. Re-attach targets for preprocess_data
+#     df_train['target'] = y_tr
+#     df_test['target']  = y_te_val
+#     processed_train, _, _ = preprocess_data(df_train, progression_type)
+#     processed_test,  _, _ = preprocess_data(df_test, progression_type)
 
-    # 6. Align columns (test may lack some delta columns present in train)
-    feat_names = [c for c in processed_train.columns if c != 'target']
-    for col in feat_names:
-        if col not in processed_test.columns:
-            processed_test[col] = np.nan
-    processed_test = processed_test[feat_names + ['target']]
+#     # 6. Align columns (test may lack some delta columns present in train)
+#     feat_names = [c for c in processed_train.columns if c != 'target']
+#     for col in feat_names:
+#         if col not in processed_test.columns:
+#             processed_test[col] = np.nan
+#     processed_test = processed_test[feat_names + ['target']]
 
-    X_tr = processed_train.drop(columns=['target']).values
-    X_te = processed_test.drop(columns=['target']).values
-    y_tr = processed_train['target'].values
+#     X_tr = processed_train.drop(columns=['target']).values
+#     X_te = processed_test.drop(columns=['target']).values
+#     y_tr = processed_train['target'].values
 
-    # 7. Train + predict
-    params = {
-        'n_estimators': n_est, 'max_depth': max_depth, 'learning_rate': lr,
-        'subsample': subsample, 'colsample_bytree': colsample,
-    }
-    clf, _, _, y_pred_arr, y_proba_arr = _fit_xgb(X_tr, X_te, y_tr, params, n_jobs=1)
-    proba = float(y_proba_arr[0])
-    pred  = int(y_pred_arr[0])
+#     # 7. Train + predict
+#     params = {
+#         'n_estimators': n_est, 'max_depth': max_depth, 'learning_rate': lr,
+#         'subsample': subsample, 'colsample_bytree': colsample,
+#     }
+#     clf, _, _, y_pred_arr, y_proba_arr = _fit_xgb(X_tr, X_te, y_tr, params, n_jobs=1)
+#     proba = float(y_proba_arr[0])
+#     pred  = int(y_pred_arr[0])
 
-    return (true_label, proba, pred, feat_names, clf.feature_importances_)
-
-
-def _eval_loocv_combo_pipeline(combo, df_with_target, progression_type,
-                                n_jobs_folds=1, combo_label=None):
-    """Evaluate one hyperparameter combo across all LOO folds (full pipeline per fold).
-    Returns result tuple: (n_est, max_depth, lr, subsample, colsample, auc_score).
-
-    n_jobs_folds : int
-        Number of parallel workers for fold evaluation within this combo.
-        1 = serial (default). -1 = use all available CPUs.
-        Note: when this function is itself called inside an outer Parallel (combo-level),
-        joblib will clamp this to 1 automatically to avoid over-subscription.
-    combo_label : str or None
-        Optional label for the tqdm fold progress bar (e.g. '3/36').
-    """
-    warnings.filterwarnings('ignore')
-    fold_desc = f"Folds ({combo_label})" if combo_label else "Folds"
-    results = _run_loocv_folds(df_with_target, combo, progression_type,
-                               n_jobs=n_jobs_folds, desc=fold_desc, tqdm_position=1)
-    y_true  = np.array([r[0] for r in results])
-    y_score = np.array([r[1] for r in results])
-    try:
-        score = roc_auc_score(y_true, y_score)
-    except Exception:
-        score = 0.0
-    return (*combo, score)
+#     return (true_label, proba, pred, feat_names, clf.feature_importances_)
 
 
-def _loocv_final_evaluation(df_with_target, best_params, progression_type,
-                             n_jobs=1):
-    """Re-run LOOCV with best hyperparameters; print full report with bootstrap CIs.
-    Returns a summary dict compatible with the report writer in train_best_model.
+# def _eval_loocv_combo_pipeline(combo, df_with_target, progression_type,
+#                                 n_jobs_folds=1, combo_label=None):
+#     """Evaluate one hyperparameter combo across all LOO folds (full pipeline per fold).
+#     Returns result tuple: (n_est, max_depth, lr, subsample, colsample, auc_score).
 
-    n_jobs : int
-        Number of parallel workers for fold evaluation (1 = serial).
-    """
-    combo = (best_params['n_estimators'], best_params['max_depth'],
-             best_params['learning_rate'], best_params['subsample'],
-             best_params['colsample_bytree'])
-    n_samples = len(df_with_target)
+#     n_jobs_folds : int
+#         Number of parallel workers for fold evaluation within this combo.
+#         1 = serial (default). -1 = use all available CPUs.
+#         Note: when this function is itself called inside an outer Parallel (combo-level),
+#         joblib will clamp this to 1 automatically to avoid over-subscription.
+#     combo_label : str or None
+#         Optional label for the tqdm fold progress bar (e.g. '3/36').
+#     """
+#     warnings.filterwarnings('ignore')
+#     fold_desc = f"Folds ({combo_label})" if combo_label else "Folds"
+#     results = _run_loocv_folds(df_with_target, combo, progression_type,
+#                                n_jobs=n_jobs_folds, desc=fold_desc, tqdm_position=1)
+#     y_true  = np.array([r[0] for r in results])
+#     y_score = np.array([r[1] for r in results])
+#     try:
+#         score = roc_auc_score(y_true, y_score)
+#     except Exception:
+#         score = 0.0
+#     return (*combo, score)
 
-    if n_jobs != 1:
-        print(f"Running LOOCV final evaluation in parallel (n_jobs={n_jobs}, {n_samples} folds)...")
-    results = _run_loocv_folds(df_with_target, combo, progression_type,
-                               n_jobs=n_jobs, desc="LOOCV final evaluation")
 
-    y_true  = np.array([r[0] for r in results])
-    y_proba = np.array([r[1] for r in results])
-    y_pred  = np.array([r[2] for r in results])
+# def _loocv_final_evaluation(df_with_target, best_params, progression_type,
+#                              n_jobs=1):
+#     """Re-run LOOCV with best hyperparameters; print full report with bootstrap CIs.
+#     Returns a summary dict compatible with the report writer in train_best_model.
 
-    # Classification report
-    cr_str = classification_report(y_true, y_pred)
-    print("Classification Report (LOOCV):")
-    print(cr_str)
+#     n_jobs : int
+#         Number of parallel workers for fold evaluation (1 = serial).
+#     """
+#     combo = (best_params['n_estimators'], best_params['max_depth'],
+#              best_params['learning_rate'], best_params['subsample'],
+#              best_params['colsample_bytree'])
+#     n_samples = len(df_with_target)
 
-    # ROC AUC
-    base_auc = roc_auc_score(y_true, y_proba)
-    print(f"\nROC AUC Score: {base_auc:.4f}")
+#     if n_jobs != 1:
+#         print(f"Running LOOCV final evaluation in parallel (n_jobs={n_jobs}, {n_samples} folds)...")
+#     results = _run_loocv_folds(df_with_target, combo, progression_type,
+#                                n_jobs=n_jobs, desc="LOOCV final evaluation")
 
-    # Bootstrap CIs
-    metrics = bootstrap_all_metrics_ci(
-        y_true, y_pred, y_proba,
-        n_boot=1000, conf_level=0.95, random_state=42, verbose=True,
-    )
-    _print_bootstrap_ci(metrics)
+#     y_true  = np.array([r[0] for r in results])
+#     y_proba = np.array([r[1] for r in results])
+#     y_pred  = np.array([r[2] for r in results])
 
-    # Aggregate feature importances across folds
-    feat_names = results[0][3]
-    all_importances = np.array([r[4] for r in results])
-    mean_importances = all_importances.mean(axis=0)
+#     # Classification report
+#     cr_str = classification_report(y_true, y_pred)
+#     print("Classification Report (LOOCV):")
+#     print(cr_str)
 
-    return {
-        "classification_report": cr_str,
-        "base_auc": float(base_auc),
-        "bootstrap_metrics": metrics,
-        "best_params": best_params,
-        "y_true": y_true,
-        "y_proba": y_proba,
-        "y_pred": y_pred,
-        "feature_names": list(feat_names),
-        "feature_importances": mean_importances,
-    }
+#     # ROC AUC
+#     base_auc = roc_auc_score(y_true, y_proba)
+#     print(f"\nROC AUC Score: {base_auc:.4f}")
+
+#     # Bootstrap CIs
+#     metrics = bootstrap_all_metrics_ci(
+#         y_true, y_pred, y_proba,
+#         n_boot=1000, conf_level=0.95, random_state=42, verbose=True,
+#     )
+#     _print_bootstrap_ci(metrics)
+
+#     # Aggregate feature importances across folds
+#     feat_names = results[0][3]
+#     all_importances = np.array([r[4] for r in results])
+#     mean_importances = all_importances.mean(axis=0)
+
+#     return {
+#         "classification_report": cr_str,
+#         "base_auc": float(base_auc),
+#         "bootstrap_metrics": metrics,
+#         "best_params": best_params,
+#         "y_true": y_true,
+#         "y_proba": y_proba,
+#         "y_pred": y_pred,
+#         "feature_names": list(feat_names),
+#         "feature_importances": mean_importances,
+#     }
 
 
 def _eval_skf_combo(combo, list_x_train, list_x_test, list_y_train, list_y_test, n_splits, feature_names):
@@ -457,87 +456,87 @@ def grid_search(x, y, param_grid, csv_path, feature_names, cv_method='skf', n_jo
     total_combos = len(all_combos)
 
     # ── LOOCV branch (full pipeline per fold) ────────────────────────────────────
-    if cv_method == 'loocv':
-        n_samples = len(df_raw)
-        print(f"Using Leave-One-Out CV ({n_samples} folds x {total_combos} combos, "
-              f"n_jobs(combos)={n_jobs}, n_jobs_folds={n_jobs_folds})")
+    # if cv_method == 'loocv':
+    #     n_samples = len(df_raw)
+    #     print(f"Using Leave-One-Out CV ({n_samples} folds x {total_combos} combos, "
+    #           f"n_jobs(combos)={n_jobs}, n_jobs_folds={n_jobs_folds})")
 
-        scores = []
-        if n_jobs == 1:
-            # Serial over combos — fold-level Parallel(n_jobs_folds) has full CPU access.
-            # Using a plain loop avoids creating a joblib nesting context that would
-            # silently clamp the inner Parallel to 1 worker.
-            with tqdm(total=total_combos, desc="LOOCV grid search", unit="combo", position=0) as pbar:
-                for idx, combo in enumerate(all_combos):
-                    combo_label = f"{idx+1}/{total_combos}"
-                    result = _eval_loocv_combo_pipeline(
-                        combo, df_raw, progression_type,
-                        n_jobs_folds=n_jobs_folds,
-                        combo_label=combo_label,
-                    )
-                    scores.append(list(result))
-                    if result[5] > best_score:
-                        best_score = result[5]
-                        best_hyperparameters = dict(zip(combo_keys, result[:5]))
-                    pbar.update(1)
-        else:
-            # Parallel over combos — joblib's nesting guard auto-clamps any inner Parallel
-            # to 1 worker, so n_jobs_folds is forced serial here.
-            results = Parallel(n_jobs=n_jobs, return_as='generator')(
-                delayed(_eval_loocv_combo_pipeline)(
-                    combo, df_raw, progression_type,
-                    n_jobs_folds=1,
-                )
-                for combo in all_combos
-            )
-            with tqdm(total=total_combos, desc="LOOCV grid search", unit="combo") as pbar:
-                for result in results:
-                    scores.append(list(result))
-                    if result[5] > best_score:
-                        best_score = result[5]
-                        best_hyperparameters = dict(zip(combo_keys, result[:5]))
-                    pbar.update(1)
+    #     scores = []
+    #     if n_jobs == 1:
+    #         # Serial over combos — fold-level Parallel(n_jobs_folds) has full CPU access.
+    #         # Using a plain loop avoids creating a joblib nesting context that would
+    #         # silently clamp the inner Parallel to 1 worker.
+    #         with tqdm(total=total_combos, desc="LOOCV grid search", unit="combo", position=0) as pbar:
+    #             for idx, combo in enumerate(all_combos):
+    #                 combo_label = f"{idx+1}/{total_combos}"
+    #                 result = _eval_loocv_combo_pipeline(
+    #                     combo, df_raw, progression_type,
+    #                     n_jobs_folds=n_jobs_folds,
+    #                     combo_label=combo_label,
+    #                 )
+    #                 scores.append(list(result))
+    #                 if result[5] > best_score:
+    #                     best_score = result[5]
+    #                     best_hyperparameters = dict(zip(combo_keys, result[:5]))
+    #                 pbar.update(1)
+    #     else:
+    #         # Parallel over combos — joblib's nesting guard auto-clamps any inner Parallel
+    #         # to 1 worker, so n_jobs_folds is forced serial here.
+    #         results = Parallel(n_jobs=n_jobs, return_as='generator')(
+    #             delayed(_eval_loocv_combo_pipeline)(
+    #                 combo, df_raw, progression_type,
+    #                 n_jobs_folds=1,
+    #             )
+    #             for combo in all_combos
+    #         )
+    #         with tqdm(total=total_combos, desc="LOOCV grid search", unit="combo") as pbar:
+    #             for result in results:
+    #                 scores.append(list(result))
+    #                 if result[5] > best_score:
+    #                     best_score = result[5]
+    #                     best_hyperparameters = dict(zip(combo_keys, result[:5]))
+    #                 pbar.update(1)
 
     # ── StratifiedKFold branch ───────────────────────────────────────────────────
+    #else:
+    y_arr = np.array(y)
+    list_x_train = []
+    list_x_test = []
+    list_y_train = []
+    list_y_test = []
+    # Determine feasible n_splits based on minority class count
+    if np.unique(y_arr).size == 2:
+        class_counts = np.bincount(y_arr)
+        min_class = int(class_counts.min())
     else:
-        y_arr = np.array(y)
-        list_x_train = []
-        list_x_test = []
-        list_y_train = []
-        list_y_test = []
-        # Determine feasible n_splits based on minority class count
-        if np.unique(y_arr).size == 2:
-            class_counts = np.bincount(y_arr)
-            min_class = int(class_counts.min())
-        else:
-            min_class = len(y_arr)
-        n_splits = max(2, min(5, min_class))
-        if n_splits < 5:
-            print(f"Note: Using StratifiedKFold with n_splits={n_splits} due to minority class size={min_class}")
-        else:
-            print(f"Using StratifiedKFold with n_splits={n_splits}")
+        min_class = len(y_arr)
+    n_splits = max(2, min(5, min_class))
+    if n_splits < 5:
+        print(f"Note: Using StratifiedKFold with n_splits={n_splits} due to minority class size={min_class}")
+    else:
+        print(f"Using StratifiedKFold with n_splits={n_splits}")
 
-        skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
-        for i, (train_ind, test_ind) in enumerate(skf.split(x, y_arr)):
-            list_x_train.append(x[train_ind])
-            list_y_train.append(y_arr[train_ind])
-            list_x_test.append(x[test_ind])
-            list_y_test.append(y_arr[test_ind])
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+    for i, (train_ind, test_ind) in enumerate(skf.split(x, y_arr)):
+        list_x_train.append(x[train_ind])
+        list_y_train.append(y_arr[train_ind])
+        list_x_test.append(x[test_ind])
+        list_y_test.append(y_arr[test_ind])
 
-        print(f"Grid search: {total_combos} hyperparameter combinations (n_jobs={n_jobs})")
+    print(f"Grid search: {total_combos} hyperparameter combinations (n_jobs={n_jobs})")
 
-        results = Parallel(n_jobs=n_jobs, return_as='generator')(
-            delayed(_eval_skf_combo)(combo, list_x_train, list_x_test, list_y_train, list_y_test, n_splits, feature_names)
-            for combo in all_combos
-        )
-        scores = []
-        with tqdm(total=total_combos, desc="SKF grid search", unit="combo") as pbar:
-            for result in results:
-                scores.append(list(result))
-                if result[5] > best_score:
-                    best_score = result[5]
-                    best_hyperparameters = dict(zip(combo_keys, result[:5]))
-                pbar.update(1)
+    results = Parallel(n_jobs=n_jobs, return_as='generator')(
+        delayed(_eval_skf_combo)(combo, list_x_train, list_x_test, list_y_train, list_y_test, n_splits, feature_names)
+        for combo in all_combos
+    )
+    scores = []
+    with tqdm(total=total_combos, desc="SKF grid search", unit="combo") as pbar:
+        for result in results:
+            scores.append(list(result))
+            if result[5] > best_score:
+                best_score = result[5]
+                best_hyperparameters = dict(zip(combo_keys, result[:5]))
+            pbar.update(1)
 
     # ensure directory exists and save the cross validations scores as csv
     dirn = os.path.dirname(csv_path)
@@ -566,133 +565,133 @@ def train_best_model(dataset, progression_type, param_grid, csv_path, save_dir="
     # --- Step 1: Create target variable on the raw DataFrame (needed for stratified split) ---
     dataset['target'] = dataset['Progression'].apply(create_target, progression_type=progression_type)
 
-    # ══════════════════════════════════════════════════════════════════════════
-    #  LOOCV mode (no train/test split)
-    # ══════════════════════════════════════════════════════════════════════════
-    if cv_method == 'loocv':
-        print(f"\n{'='*60}")
-        print(f"LOOCV — full dataset ({len(dataset)} samples)")
-        print(f"{'='*60}")
+    # # ══════════════════════════════════════════════════════════════════════════
+    # #  LOOCV mode (no train/test split)
+    # # ══════════════════════════════════════════════════════════════════════════
+    # if cv_method == 'loocv':
+    #     print(f"\n{'='*60}")
+    #     print(f"LOOCV — full dataset ({len(dataset)} samples)")
+    #     print(f"{'='*60}")
 
-        # Suppress noisy warnings (convergence, deprecation, etc.) during grid search
-        warnings.filterwarnings('ignore')
+    #     # Suppress noisy warnings (convergence, deprecation, etc.) during grid search
+    #     warnings.filterwarnings('ignore')
 
-        model_dict = grid_search(
-            None, None, param_grid, csv_path, None,
-            cv_method='loocv', n_jobs=n_jobs,
-            df_raw=dataset,
-            progression_type=progression_type,
-            n_jobs_folds=n_jobs_folds,
-        )
+    #     model_dict = grid_search(
+    #         None, None, param_grid, csv_path, None,
+    #         cv_method='loocv', n_jobs=n_jobs,
+    #         df_raw=dataset,
+    #         progression_type=progression_type,
+    #         n_jobs_folds=n_jobs_folds,
+    #     )
 
-        # Final evaluation: re-run LOOCV with best hyperparameters
-        summary = _loocv_final_evaluation(
-            dataset, model_dict,
-            progression_type=progression_type,
-            n_jobs=n_jobs_folds,
-        )
+    #     # Final evaluation: re-run LOOCV with best hyperparameters
+    #     summary = _loocv_final_evaluation(
+    #         dataset, model_dict,
+    #         progression_type=progression_type,
+    #         n_jobs=n_jobs_folds,
+    #     )
 
-        # Save report only (LOOCV produces N models; no single model to persist)
-        if save_artifacts:
-            os.makedirs(save_dir, exist_ok=True)
-            base = model_base_name or os.path.splitext(os.path.basename(csv_path))[0]
-            report_path = os.path.join(save_dir, f"{base}_report_{progression_type}.txt")
-            with open(report_path, "w") as f:
-                f.write(f"Dataset base: {base}\n")
-                f.write(f"Progression type: {progression_type}\n")
-                f.write(f"CV method: loocv (no train/test split)\n")
-                f.write(f"Total samples: {len(dataset)}\n")
-                f.write("\nBest hyperparameters:\n")
-                for k, v in summary['best_params'].items():
-                    f.write(f"  {k}: {v}\n")
-                f.write("\nClassification Report:\n")
-                f.write(summary["classification_report"] + "\n")
-                f.write(f"\nBase ROC AUC: {summary['base_auc']:.4f}\n")
-                bm = summary["bootstrap_metrics"]
-                _write_bootstrap_ci(f, bm)
-            print(f"\nSaved report: {report_path}")
+    #     # Save report only (LOOCV produces N models; no single model to persist)
+    #     if save_artifacts:
+    #         os.makedirs(save_dir, exist_ok=True)
+    #         base = model_base_name or os.path.splitext(os.path.basename(csv_path))[0]
+    #         report_path = os.path.join(save_dir, f"{base}_report_{progression_type}.txt")
+    #         with open(report_path, "w") as f:
+    #             f.write(f"Dataset base: {base}\n")
+    #             f.write(f"Progression type: {progression_type}\n")
+    #             f.write(f"CV method: loocv (no train/test split)\n")
+    #             f.write(f"Total samples: {len(dataset)}\n")
+    #             f.write("\nBest hyperparameters:\n")
+    #             for k, v in summary['best_params'].items():
+    #                 f.write(f"  {k}: {v}\n")
+    #             f.write("\nClassification Report:\n")
+    #             f.write(summary["classification_report"] + "\n")
+    #             f.write(f"\nBase ROC AUC: {summary['base_auc']:.4f}\n")
+    #             bm = summary["bootstrap_metrics"]
+    #             _write_bootstrap_ci(f, bm)
+    #         print(f"\nSaved report: {report_path}")
 
-        return None, None, None  # No single model in LOOCV mode
+    #     return None, None, None  # No single model in LOOCV mode
 
     # ══════════════════════════════════════════════════════════════════════════
     #  SKF (unchanged default behaviour)
     # ══════════════════════════════════════════════════════════════════════════
-    else:
+    #else:
         # --- Step 2: Stratified train/test split on raw DataFrame indices ---
-        train_idx, test_idx = train_test_split(
-            dataset.index, test_size=0.2, random_state=42, stratify=dataset['target']
-        )
-        df_train_raw = dataset.loc[train_idx].copy()
-        df_test_raw = dataset.loc[test_idx].copy()
+    train_idx, test_idx = train_test_split(
+        dataset.index, test_size=0.2, random_state=42, stratify=dataset['target']
+    )
+    df_train_raw = dataset.loc[train_idx].copy()
+    df_test_raw = dataset.loc[test_idx].copy()
 
-        # --- Step 4: Feature engineering + preprocessing on each split independently ---
-        y_train_target = df_train_raw['target'].values
-        y_test_target = df_test_raw['target'].values
-        df_train_raw = df_train_raw.drop(columns=['target'])
-        df_test_raw = df_test_raw.drop(columns=['target'])
+    # --- Step 4: Feature engineering + preprocessing on each split independently ---
+    y_train_target = df_train_raw['target'].values
+    y_test_target = df_test_raw['target'].values
+    df_train_raw = df_train_raw.drop(columns=['target'])
+    df_test_raw = df_test_raw.drop(columns=['target'])
 
-        df_train_feat = create_delta_features(df_train_raw)
-        df_test_feat = create_delta_features(df_test_raw)
+    df_train_feat = create_delta_features(df_train_raw)
+    df_test_feat = create_delta_features(df_test_raw)
 
-        df_train_feat['target'] = y_train_target
-        df_test_feat['target'] = y_test_target
+    df_train_feat['target'] = y_train_target
+    df_test_feat['target'] = y_test_target
 
-        processed_train, _, _ = preprocess_data(df_train_feat, progression_type)
-        processed_test, _, _ = preprocess_data(df_test_feat, progression_type)
+    processed_train, _, _ = preprocess_data(df_train_feat, progression_type)
+    processed_test, _, _ = preprocess_data(df_test_feat, progression_type)
 
-        feature_names = [c for c in processed_train.columns if c != 'target']
-        for col in feature_names:
-            if col not in processed_test.columns:
-                processed_test[col] = np.nan
-        processed_test = processed_test[feature_names + ['target']]
+    feature_names = [c for c in processed_train.columns if c != 'target']
+    for col in feature_names:
+        if col not in processed_test.columns:
+            processed_test[col] = np.nan
+    processed_test = processed_test[feature_names + ['target']]
 
-        X_train = processed_train.drop(columns=['target']).values
-        X_test = processed_test.drop(columns=['target']).values
-        y_train = processed_train['target'].values
-        y_test = processed_test['target'].values
+    X_train = processed_train.drop(columns=['target']).values
+    X_test = processed_test.drop(columns=['target']).values
+    y_train = processed_train['target'].values
+    y_test = processed_test['target'].values
 
-        # --- Step 5: Grid search ---
-        model_dict = grid_search(X_train, y_train, param_grid, csv_path, feature_names, cv_method=cv_method, n_jobs=n_jobs)
+    # --- Step 5: Grid search ---
+    model_dict = grid_search(X_train, y_train, param_grid, csv_path, feature_names, cv_method=cv_method, n_jobs=n_jobs)
 
-        # --- Step 6: Final model with full report ---
-        model, columns, imputer, scaler, summary = build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_names)
+    # --- Step 6: Final model with full report ---
+    model, columns, imputer, scaler, summary = build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_names)
 
-        try:
-            model.feature_names_in_ = np.array(columns)
-        except Exception:
-            pass
+    try:
+        model.feature_names_in_ = np.array(columns)
+    except Exception:
+        pass
 
-        if save_artifacts:
-            os.makedirs(save_dir, exist_ok=True)
-            base = model_base_name or os.path.splitext(os.path.basename(csv_path))[0]
-            model_path = os.path.join(save_dir, f"{base}_model_{progression_type}.pkl")
-            scaler_path = os.path.join(save_dir, f"{base}_scaler_{progression_type}.pkl")
-            imputer_path = os.path.join(save_dir, f"{base}_imputer_{progression_type}.pkl")
+    if save_artifacts:
+        os.makedirs(save_dir, exist_ok=True)
+        base = model_base_name or os.path.splitext(os.path.basename(csv_path))[0]
+        model_path = os.path.join(save_dir, f"{base}_model_{progression_type}.pkl")
+        scaler_path = os.path.join(save_dir, f"{base}_scaler_{progression_type}.pkl")
+        imputer_path = os.path.join(save_dir, f"{base}_imputer_{progression_type}.pkl")
 
-            joblib.dump(model, model_path)
-            joblib.dump(scaler, scaler_path)
-            joblib.dump(imputer, imputer_path)
+        joblib.dump(model, model_path)
+        joblib.dump(scaler, scaler_path)
+        joblib.dump(imputer, imputer_path)
 
-            print("\nSaved artifacts:")
-            print(f"- Model:   {model_path}")
-            print(f"- Scaler:  {scaler_path}")
-            print(f"- Imputer: {imputer_path}")
+        print("\nSaved artifacts:")
+        print(f"- Model:   {model_path}")
+        print(f"- Scaler:  {scaler_path}")
+        print(f"- Imputer: {imputer_path}")
 
-            report_path = os.path.join(save_dir, f"{base}_report_{progression_type}.txt")
-            with open(report_path, "w") as f:
-                f.write(f"Dataset base: {base}\n")
-                f.write(f"Progression type: {progression_type}\n")
-                f.write(f"CV method: {cv_method}\n")
-                f.write("Best hyperparameters:\n")
-                for k, v in model.get_params().items():
-                    if k in ["n_estimators", "max_depth", "learning_rate", "subsample", "colsample_bytree", "random_state", "objective", "eval_metric"]:
-                        f.write(f"  {k}: {v}\n")
-                f.write("\nClassification Report:\n")
-                f.write(summary["classification_report"] + "\n")
-                f.write(f"\nBase ROC AUC: {summary['base_auc']:.4f}\n")
-                bm = summary["bootstrap_metrics"]
-                _write_bootstrap_ci(f, bm)
-            print(f"- Report:  {report_path}")
+        report_path = os.path.join(save_dir, f"{base}_report_{progression_type}.txt")
+        with open(report_path, "w") as f:
+            f.write(f"Dataset base: {base}\n")
+            f.write(f"Progression type: {progression_type}\n")
+            f.write(f"CV method: {cv_method}\n")
+            f.write("Best hyperparameters:\n")
+            for k, v in model.get_params().items():
+                if k in ["n_estimators", "max_depth", "learning_rate", "subsample", "colsample_bytree", "random_state", "objective", "eval_metric"]:
+                    f.write(f"  {k}: {v}\n")
+            f.write("\nClassification Report:\n")
+            f.write(summary["classification_report"] + "\n")
+            f.write(f"\nBase ROC AUC: {summary['base_auc']:.4f}\n")
+            bm = summary["bootstrap_metrics"]
+            _write_bootstrap_ci(f, bm)
+        print(f"- Report:  {report_path}")
 
-        return model, columns, summary
+    return model, columns, summary
 
