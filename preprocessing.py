@@ -309,7 +309,7 @@ def impute_gds(list):
 
 
 # create new categorical longitudinal variables "hearing" and "vision"
-#      using HEARING HEARAID HEARWAID, VISION VISCORR VISWCORR.
+# using HEARING HEARAID HEARWAID, VISION VISCORR VISWCORR.
 def create_hv(df):
 
     # check if having required vars
