@@ -3,6 +3,51 @@ import numpy as np
 import ast
 import os
 import json
+from sklearn.experimental import enable_iterative_imputer
+from sklearn.impute import IterativeImputer
+from sklearn.linear_model import BayesianRidge
+
+
+# Clinical bounds for imputation (min, max)
+BOUNDS = {
+    # Continuous / ordinal
+    'NACCBMI':    (10, 60),
+    'NACCMMSE':   (0, 30),
+    'NACCGDS':    (0, 15),
+    'CDRSUM':     (0, 18),
+    'SMOKYRS':    (0, 80),
+    'EDUC':       (0, 25),
+
+    # Binary / categorical (will be rounded)
+    'TOBAC30':    (0, 1),
+    'BILLS':      (0, 3),
+    'TAXES':      (0, 3),
+    'SHOPPING':   (0, 3),
+    'GAMES':      (0, 3),
+    'STOVE':      (0, 3),
+    'MEALPREP':   (0, 3),
+    'EVENTS':     (0, 3),
+    'PAYATTN':    (0, 3),
+    'REMDATES':   (0, 3),
+    'TRAVEL':     (0, 3),
+    'NACCLIVS':   (0, 1),
+    'COMMUN':     (0, 1),
+    'ALCOHOL':    (0, 1),
+    'NACCNE4S':   (0, 2),   # number of ε4 alleles
+    'SEX':        (1, 2),
+    'RACE':       (1, 8),
+    'HISPANIC':   (0, 1),
+
+    # Raw hearing/vision variables (will be rounded)
+    'HEARING':    (1, 3),
+    'HEARAID':    (0, 1),
+    'HEARWAID':   (0, 1),
+    'VISION':     (1, 3),
+    'VISCORR':    (0, 1),
+    'VISWCORR':   (0, 1),
+}
+FAQ_COLS = ['BILLS', 'TAXES', 'SHOPPING', 'GAMES', 'STOVE',
+                'MEALPREP', 'EVENTS', 'PAYATTN', 'REMDATES', 'TRAVEL']
 
 def progressor_class(file_path):
     
@@ -255,7 +300,124 @@ def create_hv(df):
     df['hearing']=hearing
     df['vision']=vision
     return df
+# must handle categorical and continuous scalars. 
 
+def static_impute(df, scalar_cols, bounds, random_state=42):
+    """
+    Impute missing values in scalar columns using MICE.
+    Modifies df in place.
+    """
+    # Select columns that exist and are numeric
+    cols = [c for c in scalar_cols if c in df.columns and df[c].dtype.kind in 'iuf']
+    if not cols:
+        return df
+    # If no missing, skip
+    if df[cols].isna().sum().sum() == 0:
+        return df
+
+    # Create a copy of the data to impute
+    X = df[cols].copy()
+    imputer = IterativeImputer(estimator=BayesianRidge(),
+                               max_iter=10,
+                               random_state=random_state)
+    X_imp = imputer.fit_transform(X)
+    df[cols] = X_imp
+
+    # Apply bounds and rounding
+    for col in cols:
+        if col in bounds:
+            lo, hi = bounds[col]
+            df[col] = df[col].clip(lo, hi)
+            # Round ordinal/binary columns
+            if col in ['TOBAC30', 'NACCLIVS', 'COMMUN', 'ALCOHOL', 'NACCNE4S', 'SEX', 'RACE', 'HISPANIC']:
+                df[col] = df[col].round().clip(lo, hi).astype('Int64')  # nullable int
+    return df
+
+def longitudinal_impute(df, long_cols, bounds, random_state=42):
+    """
+    Impute missing values in longitudinal list columns using MICE on flattened data.
+    Modifies df in place.
+    """
+    existing = [c for c in long_cols if c in df.columns]
+    if not existing:
+        return df
+
+    # Quick check if any missing values exist in any list
+    has_missing = False
+    for col in existing:
+        for lst in df[col]:
+            if isinstance(lst, list) and any(pd.isna(x) for x in lst):
+                has_missing = True
+                break
+        if has_missing:
+            break
+    if not has_missing:
+        return df
+
+    # --- Flatten to long format ---
+    records = []
+    for idx, row in df.iterrows():
+        n_visits = len(row['months_since_baseline'])
+        for visit in range(n_visits):
+            rec = {'ID': row['ID'], 'visit': visit, 'months': row['months_since_baseline'][visit]}
+            # Include scalar columns (already imputed) as predictors
+            for col in _SCALAR_COLS:
+                if col in df.columns:
+                    rec[col] = row[col]
+            for col in existing:
+                if isinstance(row[col], list) and len(row[col]) > visit:
+                    rec[col] = row[col][visit]
+                else:
+                    rec[col] = np.nan
+            records.append(rec)
+    long_df = pd.DataFrame(records)
+
+    # Identify columns with missing values (only those we want to impute)
+    impute_cols = [c for c in existing if long_df[c].isna().any()]
+    if not impute_cols:
+        return df
+
+    # Use all numeric columns as features (exclude ID, visit, and any non‑numeric)
+    feature_cols = [c for c in long_df.columns if c not in ['ID', 'visit'] and long_df[c].dtype.kind in 'iuf']
+    # Make sure we only impute the columns we need
+    X = long_df[feature_cols].copy()
+    imputer = IterativeImputer(estimator=BayesianRidge(),
+                               max_iter=10,
+                               random_state=random_state)
+    X_imp = imputer.fit_transform(X)
+
+    # Write imputed values back only for impute_cols
+    for i, col in enumerate(feature_cols):
+        if col in impute_cols:
+            long_df[col] = X_imp[:, i]
+
+    # --- Reshape back to subject-wise lists ---
+    # Sort by visit and group by ID
+    long_df_sorted = long_df.sort_values(['ID', 'visit'])
+    for col in impute_cols:
+        # Build list per subject
+        list_series = long_df_sorted.groupby('ID')[col].apply(list).reset_index()
+        list_series.columns = ['ID', col + '_imp']
+        # Merge into original df
+        df = df.merge(list_series, on='ID', how='left')
+        # Replace original column with imputed list
+        df[col] = df[col + '_imp']
+        df.drop(columns=[col + '_imp'], inplace=True)
+
+    # --- Apply bounds and rounding ---
+    for col in impute_cols:
+        if col in bounds:
+            lo, hi = bounds[col]
+            # Clip each element in each list
+            df[col] = df[col].apply(
+                lambda lst: [np.clip(x, lo, hi) for x in lst] if isinstance(lst, list) else lst
+            )
+            # Round categorical/ordinal variables
+            if col in ['TOBAC30', 'NACCLIVS', 'COMMUN', 'ALCOHOL'] or col in FAQ_COLS:
+                df[col] = df[col].apply(
+                    lambda lst: [round(x) for x in lst] if isinstance(lst, list) else lst
+                )
+    return df
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  CALLABLE PREPROCESSING PIPELINE
@@ -535,8 +697,7 @@ def run_pipeline(
     lead_cn = []
     lead_mci_ad = []
 
-    FAQ_COLS = ['BILLS', 'TAXES', 'SHOPPING', 'GAMES', 'STOVE',
-                'MEALPREP', 'EVENTS', 'PAYATTN', 'REMDATES', 'TRAVEL']
+
     HV_RAW   = ['HEARING', 'HEARAID', 'HEARWAID', 'VISION', 'VISCORR', 'VISWCORR']
 
     # ── Build one-row-per-subject DataFrame from source CSV ───────────────
@@ -627,7 +788,16 @@ def run_pipeline(
 
         # ── 3. Optional imputation ────────────────────────────────────────
         # TODO: Implement MICE imputation. 
-        # if do_impute:
+        if do_impute:
+            if verbose:
+                print("Imputing scalar columns with MICE... ")
+            static_impute(df, _SCALAR_COLS, BOUNDS)
+            if verbose:
+                print("scalar imputation done.")
+            long_cols_to_impute = [c for c in _LONG_COLS if c in df.columns]
+            df = longitudinal_impute(df, long_cols_to_impute, BOUNDS)
+            if verbose:
+                print("imputed", end=" ")
         #     imp_cats = ['TOBAC30'] + FAQ_COLS
         #     df['NACCGDS'] = df['NACCGDS'].apply(
         #         lambda x: eval(x.replace("nan", "np.nan")) if isinstance(x, str) else x
