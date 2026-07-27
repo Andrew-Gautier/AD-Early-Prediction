@@ -11,12 +11,12 @@ from sklearn.linear_model import BayesianRidge
 # Clinical bounds for imputation (min, max)
 BOUNDS = {
     # Continuous / ordinal
-    'NACCBMI':    (10, 60),
+    'NACCBMI':    (10, 100), # 10.0-100.0 allowed
     'NACCMMSE':   (0, 30),
     'NACCGDS':    (0, 15),
     'CDRSUM':     (0, 18),
-    'SMOKYRS':    (0, 80),
-    'EDUC':       (0, 25),
+    'SMOKYRS':    (0, 87), # 0-87 allowed
+    'EDUC':       (0, 36), # 0-36 allowed
 
     # Binary / categorical (will be rounded)
     'TOBAC30':    (0, 1),
@@ -30,19 +30,19 @@ BOUNDS = {
     'PAYATTN':    (0, 3),
     'REMDATES':   (0, 3),
     'TRAVEL':     (0, 3),
-    'NACCLIVS':   (0, 1),
-    'COMMUN':     (0, 1),
-    'ALCOHOL':    (0, 1),
+    'NACCLIVS':   (1, 5), # 1 to 5, whole number only
+    'COMMUN':     (0, 3), # 0 to 3, whole number only with exception of 0.5 = Questionable impairment
+    'ALCOHOL':    (0, 2), # 0 to 2, whole number only
     'NACCNE4S':   (0, 2),   # number of ε4 alleles
     'SEX':        (1, 2),
-    'RACE':       (1, 8),
+    'RACE':       (1, 5), # 1 to 5, but 50 = Other (specify)
     'HISPANIC':   (0, 1),
 
     # Raw hearing/vision variables (will be rounded)
-    'HEARING':    (1, 3),
+    'HEARING':    (0, 1), # 0 = No; 1 = Yes
     'HEARAID':    (0, 1),
     'HEARWAID':   (0, 1),
-    'VISION':     (1, 3),
+    'VISION':     (0, 1),
     'VISCORR':    (0, 1),
     'VISWCORR':   (0, 1),
 }
