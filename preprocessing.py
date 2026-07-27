@@ -389,7 +389,7 @@ def longitudinal_impute(df, long_cols, bounds, random_state=42):
     # Write imputed values back only for impute_cols
     for i, col in enumerate(feature_cols):
         if col in impute_cols:
-            long_df[col] = X_imp[:, i]
+            long_df[col] = X_imp[:, i].astype(float)
 
     # --- Reshape back to subject-wise lists ---
     # Sort by visit and group by ID
@@ -410,7 +410,7 @@ def longitudinal_impute(df, long_cols, bounds, random_state=42):
             lo, hi = bounds[col]
             # Clip each element in each list
             df[col] = df[col].apply(
-                lambda lst: [np.clip(x, lo, hi) for x in lst] if isinstance(lst, list) else lst
+                lambda lst: [float(np.clip(x, lo, hi)) for x in lst] if isinstance(lst, list) else lst
             )
             # Round categorical/ordinal variables
             if col in ['TOBAC30', 'NACCLIVS', 'COMMUN', 'ALCOHOL'] or col in FAQ_COLS:
