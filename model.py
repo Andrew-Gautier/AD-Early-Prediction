@@ -399,16 +399,17 @@ def train_best_model(
     dataset, progression_type, params, csv_path,
     save_dir="saved_models", model_base_name=None,
     save_artifacts=True, n_jobs=1,
-    n_trials=100, objective_metric='auc',
+    n_trials=100, objective_metric='auc', random_state=42
 ):
     
     dataset = dataset.copy()
 
     # --- Step 1: Create target variable on the raw DataFrame (needed for stratified split) ---
     dataset['target'] = dataset['Progression'].apply(create_target, progression_type=progression_type)
-
+    # TODO: make this random_state variable be adjustable by the user. 
+   
     train_idx, test_idx = train_test_split(
-        dataset.index, test_size=0.2, random_state=42, stratify=dataset['target']
+        dataset.index, test_size=0.2, random_state=random_state, stratify=dataset['target']
     )
     df_train_raw = dataset.loc[train_idx].copy()
     df_test_raw = dataset.loc[test_idx].copy()
