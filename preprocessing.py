@@ -659,6 +659,7 @@ def run_pipeline(
     max_visits: int = None,
     min_age: int = 50,
     lead_time_pct: float = 0.05,
+    random_state: int = 42,
     do_impute: bool = False,
     verbose: bool = True,
 ):
@@ -675,6 +676,7 @@ def run_pipeline(
     min_age         : drop subjects younger than this at baseline.
     lead_time_pct   : fraction of each (visit_count × class) cell to reserve
                       for the lead-time holdout set (default 5%).
+    random_state    :
     do_impute       : if True, apply GDS/categorical/BMI imputation.
     verbose         : print progress.
 
@@ -791,11 +793,11 @@ def run_pipeline(
         if do_impute:
             if verbose:
                 print("Imputing scalar columns with MICE... ")
-            static_impute(df, _SCALAR_COLS, BOUNDS)
+            static_impute(df, _SCALAR_COLS, BOUNDS, random_state)
             if verbose:
                 print("scalar imputation done.")
             long_cols_to_impute = [c for c in _LONG_COLS if c in df.columns]
-            df = longitudinal_impute(df, long_cols_to_impute, BOUNDS)
+            df = longitudinal_impute(df, long_cols_to_impute, BOUNDS, random_state)
             if verbose:
                 print("imputed", end=" ")
         #     imp_cats = ['TOBAC30'] + FAQ_COLS
@@ -846,7 +848,7 @@ def run_pipeline(
                 if subset.empty:
                     continue
                 k = math.ceil(len(subset) * lead_time_pct)
-                sampled = subset.sample(n=k, random_state=42)
+                sampled = subset.sample(n=k, random_state=42)   # lead time group should be consistent.
                 lead_parts.append(sampled)
                 pool_parts.append(subset.drop(sampled.index))
             lead_df = pd.concat(lead_parts) if lead_parts else pd.DataFrame()
