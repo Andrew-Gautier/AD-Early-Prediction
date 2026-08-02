@@ -1,0 +1,40 @@
+Dataset base: pooled_MCI_AD_AD_seed1051802512
+Progression type: AD
+Objective metric: auc
+n_trials: 1000
+Random state: 1051802512
+Best hyperparameters:
+  n_estimators: 480
+  max_depth: 3
+  learning_rate: 0.05602688515067173
+  subsample: 0.9339668582023113
+  colsample_bytree: 0.6567072685120289
+  colsample_bylevel: 0.9867058275011216
+  colsample_bynode: 0.522855416732522
+  min_child_weight: 4
+  gamma: 4.493537792864951
+  reg_alpha: 0.01728813201796461
+  reg_lambda: 0.0015933664665911608
+  max_delta_step: 0
+
+Classification Report:
+              precision    recall  f1-score   support
+
+           0       0.75      0.84      0.79       280
+           1       0.83      0.74      0.78       299
+
+    accuracy                           0.79       579
+   macro avg       0.79      0.79      0.79       579
+weighted avg       0.79      0.79      0.79       579
+
+
+Base ROC AUC: 0.8788
+PR-AUC (Average Precision): 0.8995
+Bootstrap 95% CI (n=1000, valid_samples=1000/1000):
+- Accuracy: 0.788 (CI: 0.751, 0.819) range=0.067
+- Precision (macro): 0.790 (CI: 0.755, 0.821) range=0.066
+- Recall (macro): 0.789 (CI: 0.754, 0.820) range=0.067
+- F1 (macro): 0.787 (CI: 0.751, 0.819) range=0.067
+- ROC AUC: 0.879 (CI: 0.850, 0.904) range=0.054
+- PPV: 0.828 (CI: 0.784, 0.873) range=0.089
+- NPV: 0.752 (CI: 0.704, 0.798) range=0.094

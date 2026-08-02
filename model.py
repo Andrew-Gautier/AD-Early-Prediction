@@ -144,7 +144,7 @@ def bootstrap_all_metrics_ci(
 # Preprocess the data
 
 
-def _fit_xgb(X_tr, X_te, y_tr, params, n_jobs=None, scale=False):
+def _fit_xgb(X_tr, X_te, y_tr, params, n_jobs=None, scale=False, random_state=42):
     """Fit (optional scaler +) XGBoost on training data; return predictions on test data.
 
     Parameters
@@ -180,7 +180,7 @@ def _fit_xgb(X_tr, X_te, y_tr, params, n_jobs=None, scale=False):
         scale_pos_weight=spw,
         enable_categorical=True,
         n_jobs=n_jobs,
-        random_state=42,
+        random_state=random_state,
         **xgb_kwargs,
     )
     model.fit(X_tr_proc, y_tr)
@@ -228,11 +228,11 @@ def _write_bootstrap_ci(f, bm):
     f.write(f"- NPV: {bm['npv'][0]:.3f} (CI: {bm['npv'][1][0]:.3f}, {bm['npv'][1][1]:.3f}) range={bm['npv'][1][1] - bm['npv'][1][0]:.3f}\n")
 
 # For the training of the best model with the best set of hyperparameters, prints out the whole performance report.
-def build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_names, charts_dir=None):
+def build_model_final(X_train, X_test, y_train, y_test, model_dict, feature_names, charts_dir=None, random_state=42):
 
     from visualization import plot_shap_summary, plot_pr_curve
 
-    model, imputer, scaler, y_pred, y_proba = _fit_xgb(X_train, X_test, y_train, model_dict)
+    model, imputer, scaler, y_pred, y_proba = _fit_xgb(X_train, X_test, y_train, model_dict, random_state=random_state)
 
     print("Classification Report:")
     cr_str = classification_report(y_test, y_pred)
@@ -314,7 +314,7 @@ def _suggest_param(trial, name, spec):
 
 def optuna_search(
     x, y, params, csv_path, feature_names,
-    n_trials=100, n_jobs=1, objective_metric='auc',
+    n_trials=100, n_jobs=1, objective_metric='auc', random_state=42
 ):
     """Bayesian hyperparameter search using Optuna (TPESampler).
 
@@ -344,7 +344,7 @@ def optuna_search(
     else:
         print(f"Using StratifiedKFold with n_splits={n_splits}")
 
-    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
     folds = [
         (x[tr], x[te], y_arr[tr], y_arr[te])
         for tr, te in skf.split(x, y_arr)
@@ -366,7 +366,7 @@ def optuna_search(
         return score_sum / n_splits
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
-    study = optuna.create_study(direction='maximize', sampler=optuna.samplers.TPESampler(seed=42))
+    study = optuna.create_study(direction='maximize', sampler=optuna.samplers.TPESampler(seed=random_state))
 
     print(f"Optuna search: {n_trials} trials, objective={objective_metric}, n_jobs={n_jobs}")
     with tqdm(total=n_trials, desc="Optuna trials", unit="trial") as pbar:
@@ -443,14 +443,14 @@ def train_best_model(
     # --- Step 3: Bayesian hyperparameter search ---
     model_dict = optuna_search(
         X_train, y_train, params, csv_path, feature_names,
-        n_trials=n_trials, n_jobs=n_jobs, objective_metric=objective_metric,
+        n_trials=n_trials, n_jobs=n_jobs, objective_metric=objective_metric, random_state=random_state
     )
 
     # --- Step 4: Final model with full report ---
     charts_dir = save_dir if save_artifacts else None
     model, columns, imputer, scaler, summary = build_model_final(
         X_train, X_test, y_train, y_test, model_dict, feature_names,
-        charts_dir=charts_dir,
+        charts_dir=charts_dir, random_state=random_state
     )
 
     try:
@@ -480,6 +480,7 @@ def train_best_model(
             f.write(f"Progression type: {progression_type}\n")
             f.write(f"Objective metric: {objective_metric}\n")
             f.write(f"n_trials: {n_trials}\n")
+            f.write(f"Random state: {random_state}\n")
             f.write("Best hyperparameters:\n")
             for k, v in model_dict.items():
                 f.write(f"  {k}: {v}\n")
