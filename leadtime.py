@@ -19,20 +19,24 @@ def eval_if_str(x):
 #    with every possible truncation being its own row.
 # return # of truncations and transformed df.
 def transform(row, progression_type):
-    num_trunc = row['n_visit']-1
+    num_trunc = row['n_visits']-1
     out = []
     for length in range(2, num_trunc+2):
         new_row = {}
-        for col in row.columns:
+        for col in row.index:
             if col in _LONG_COLS:
-                new_row[col] = row[col].apply(
-                    lambda x: x[:length] if isinstance(x, list) else np.nan)
-            else: new_row[col] = row[col]
+                if isinstance(row[col], list):
+                    new_row[col] = row[col][:length]
+                else:
+                    new_row[col] = np.nan
+            else: 
+                new_row[col] = row[col]
         out.append(new_row)
     df = pd.DataFrame(out)
-    df,_,_ = create_delta_features(df)
+    df = create_delta_features(df)
     df,_,_ = preprocess_data(df, progression_type)
-
+    print(df.shape)
+    print(df.head())
     return num_trunc, df.drop(columns=['target'])
 
 
@@ -44,7 +48,7 @@ def run_leadtime(
         file_path, # csv df address
         dest_dir,
         model,
-        progression_type,
+        progression_type, # 'CN' or 'AD'
 ):
     os.makedirs(dest_dir, exist_ok=True)
     csv=pd.read_csv(file_path)
@@ -62,7 +66,8 @@ def run_leadtime(
     #   starting with the shortest segment (2 visits).
     prob_csv = []
     pred_csv = []
-    for _,row in p_df.iterrows():
+    for ind,row in p_df.iterrows():
+        print(f"working on {ind}")
         new_row_prob = {}
         new_row_pred = {}
         new_row_prob['ID']=row['ID']
@@ -82,3 +87,19 @@ def run_leadtime(
     pd.DataFrame(prob_csv).to_csv(prob_path, index=False)
     pd.DataFrame(pred_csv).to_csv(pred_path, index=False)
 
+    ## NON-PROGRESSORS
+
+
+######### TESTING #############
+import joblib
+
+m=joblib.load('AD-Early-Prediction\experiments\experiment_nonimputedseeds_test\pooled_MCI_AD_AD_seed107420369_model_AD.pkl')
+
+nan=np.nan
+run_leadtime(
+    'AD-Early-Prediction\datasets\Dataset_v2_1\lead_time_MCI_AD.csv',
+    'lead_time',
+    m,
+    'AD'
+)
+###########################################
