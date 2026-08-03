@@ -22,6 +22,8 @@ except ImportError:
         return iterable
 from preprocessing import create_target
 from feature_engineering import create_delta_features, preprocess_data
+from scipy import stats
+
 
 # XGBoost hyperparameter keys that optuna_search / _fit_xgb understand
 _XGB_HPARAM_KEYS = {
@@ -29,6 +31,20 @@ _XGB_HPARAM_KEYS = {
     'colsample_bytree', 'colsample_bylevel', 'colsample_bynode',
     'min_child_weight', 'gamma', 'reg_alpha', 'reg_lambda', 'max_delta_step',
 }
+
+def mean_ci(data, conf=0.95):
+    """
+    Compute mean and confidence interval using t-distribution.
+    Returns: (mean, lower, upper, std)
+    """
+    n = len(data)
+    if n < 2:
+        return np.nan, np.nan, np.nan, np.nan
+    mean = np.mean(data)
+    std = np.std(data, ddof=1)
+    sem = std / np.sqrt(n)
+    ci = stats.t.ppf((1 + conf) / 2, df=n - 1) * sem
+    return mean, mean - ci, mean + ci, std
 
 def bootstrap_all_metrics_ci(
     y_true,

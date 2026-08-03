@@ -13,7 +13,7 @@ from sklearn.metrics import (
 
 
 
-def plot_feature_importance(importances, feature_names, top_n=20, title=None, save_path=None,
+def plot_feature_importance(importances, feature_names, top_n=50, title=None, save_path=None,
                             title_fontsize=14, label_fontsize=12, tick_fontsize=10, value_fontsize=8):
     """Publication-quality horizontal bar chart of top-N feature importances.
 
@@ -166,34 +166,20 @@ def plot_pr_curve(y_true, y_proba, title=None, save_path=None):
     return precision, recall, ap
 
 
-def plot_shap_summary(model, X_train, feature_names, max_display=20, title=None, save_path=None):
-    """SHAP beeswarm summary plot using TreeExplainer (computed on training data).
-
+def plot_shap_summary(model, X_train, feature_names, max_display=50, title=None,
+                      save_path=None, xlim=None, figsize=(10, 6)):
+    """
     Parameters
     ----------
-    model : fitted XGBClassifier
-        The trained model to explain.
-    X_train : np.ndarray
-        Training feature matrix (the data SHAP values are computed on).
-    feature_names : list[str]
-        Feature names corresponding to columns of X_train.
-    max_display : int
-        Maximum number of features to display (sorted by mean |SHAP|).
-    title : str, optional
-        Custom plot title (rendered as a suptitle).
-    save_path : str, optional
-        If provided, save the figure to this path.
-
-    Returns
-    -------
-    shap_values : np.ndarray
-        SHAP values array of shape (n_samples, n_features).
-    explainer : shap.TreeExplainer
+    ...
+    xlim : tuple or None, default None
+        If provided, set the x-axis limits, e.g., (-1.0, 1.0).
+    figsize : tuple, default (10, 6)
+        Figure size (width, height) in inches.
     """
     explainer = shap.TreeExplainer(model)
     shap_values = explainer.shap_values(X_train)
 
-    # shap.summary_plot manages its own figure; use show=False so we can save
     shap.summary_plot(
         shap_values,
         X_train,
@@ -202,6 +188,13 @@ def plot_shap_summary(model, X_train, feature_names, max_display=20, title=None,
         show=False,
     )
     fig = plt.gcf()
+    ax = plt.gca()
+
+    if xlim is not None:
+        ax.set_xlim(xlim[0], xlim[1])
+
+    fig.set_size_inches(figsize[0], figsize[1])
+
     if title:
         fig.suptitle(title, fontsize=14, fontweight='bold', y=1.01)
     plt.tight_layout()
@@ -210,3 +203,118 @@ def plot_shap_summary(model, X_train, feature_names, max_display=20, title=None,
     plt.show()
 
     return shap_values, explainer
+
+
+def plot_aggregate_roc(y_true_list, y_proba_list, label, color='#2E86AB',
+                       n_points=100, ci=95, save_path=None, ax=None):
+    """
+    Plot aggregate ROC curve from multiple (y_true, y_proba) pairs.
+
+    Parameters
+    ----------
+    y_true_list : list of array-like
+        True labels for each run.
+    y_proba_list : list of array-like
+        Predicted probabilities for each run.
+    label : str
+        Legend label for the curve.
+    color : str
+        Main color for the line and fill.
+    n_points : int
+        Number of FPR points for interpolation.
+    ci : float, default 95
+        Confidence interval percentage (e.g., 95 for 95% band).
+    save_path : str, optional
+        If given, save the figure.
+    ax : matplotlib.axes, optional
+        If provided, plot on this axis; otherwise create new figure.
+    """
+    # Compute AUCs for each run (optional, for annotation)
+    aucs = [roc_auc_score(yt, yp) for yt, yp in zip(y_true_list, y_proba_list)]
+    mean_auc = np.mean(aucs)
+    std_auc = np.std(aucs)
+
+    # Common FPR grid
+    fpr_grid = np.linspace(0, 1, n_points)
+    tprs = []
+
+    for yt, yp in zip(y_true_list, y_proba_list):
+        fpr, tpr, _ = roc_curve(yt, yp)
+        # Interpolate TPR to the common FPR grid
+        tpr_interp = np.interp(fpr_grid, fpr, tpr)
+        tprs.append(tpr_interp)
+
+    tprs = np.array(tprs)  # shape: (n_runs, n_points)
+
+    mean_tpr = tprs.mean(axis=0)
+    lower = np.percentile(tprs, (100 - ci) / 2, axis=0)
+    upper = np.percentile(tprs, 100 - (100 - ci) / 2, axis=0)
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(7, 6))
+
+    ax.plot(fpr_grid, mean_tpr, color=color, lw=2.5,
+            label=f'{label} (AUC = {mean_auc:.3f} ± {std_auc:.3f})')
+    ax.fill_between(fpr_grid, lower, upper, color=color, alpha=0.2,
+                    label=f'{ci}% CI band')
+
+    ax.plot([0, 1], [0, 1], 'k--', lw=1, alpha=0.5, label='Random classifier')
+    ax.set_xlim([-0.02, 1.02])
+    ax.set_ylim([-0.02, 1.02])
+    ax.set_xlabel('False Positive Rate', fontsize=12)
+    ax.set_ylabel('True Positive Rate', fontsize=12)
+    ax.legend(loc='lower right', fontsize=11, framealpha=0.9)
+    ax.grid(alpha=0.3, linestyle='--')
+
+    if save_path:
+        plt.tight_layout()
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close()
+
+    return fpr_grid, mean_tpr, lower, upper, mean_auc, std_auc
+
+
+def plot_aggregate_pr(y_true_list, y_proba_list, label, color='#E84855',
+                      n_points=100, ci=95, save_path=None, ax=None):
+    recall_grid = np.linspace(0, 1, n_points)
+    precisions = []
+
+    for yt, yp in zip(y_true_list, y_proba_list):
+        precision, recall, _ = precision_recall_curve(yt, yp)
+        # Interpolate precision onto common recall grid
+        prec_interp = np.interp(recall_grid, recall[::-1], precision[::-1])
+        precisions.append(prec_interp)
+
+    precisions = np.array(precisions)
+    mean_prec = precisions.mean(axis=0)
+    lower = np.percentile(precisions, (100 - ci) / 2, axis=0)
+    upper = np.percentile(precisions, 100 - (100 - ci) / 2, axis=0)
+
+    ap_scores = [average_precision_score(yt, yp) for yt, yp in zip(y_true_list, y_proba_list)]
+    mean_ap = np.mean(ap_scores)
+    std_ap = np.std(ap_scores)
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(7, 6))
+
+    ax.plot(recall_grid, mean_prec, color=color, lw=2.5,
+            label=f'{label} (AP = {mean_ap:.3f} ± {std_ap:.3f})')
+    ax.fill_between(recall_grid, lower, upper, color=color, alpha=0.2,
+                    label=f'{ci}% CI band')
+
+    baseline = np.mean(np.concatenate(y_true_list))  # overall prevalence
+    ax.axhline(baseline, color='k', linestyle='--', lw=1, alpha=0.5,
+               label=f'Random classifier (AP = {baseline:.3f})')
+    ax.set_xlim([-0.02, 1.02])
+    ax.set_ylim([-0.02, 1.02])
+    ax.set_xlabel('Recall', fontsize=12)
+    ax.set_ylabel('Precision', fontsize=12)
+    ax.legend(loc='upper right', fontsize=11, framealpha=0.9)
+    ax.grid(alpha=0.3, linestyle='--')
+
+    if save_path:
+        plt.tight_layout()
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close()
+
+    return recall_grid, mean_prec, lower, upper, mean_ap, std_ap
