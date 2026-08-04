@@ -1,0 +1,40 @@
+Dataset base: CN_MCI_seed142
+Progression type: CN
+Objective metric: auc
+n_trials: 1000
+Random state: 142
+Best hyperparameters:
+  n_estimators: 914
+  max_depth: 4
+  learning_rate: 0.010222776149638754
+  subsample: 0.2865457262472199
+  colsample_bytree: 0.7779443756417959
+  colsample_bylevel: 0.9396330675930786
+  colsample_bynode: 0.3342170085977815
+  min_child_weight: 4
+  gamma: 1.5623570821612447
+  reg_alpha: 0.41406768270524985
+  reg_lambda: 0.0005146033199732784
+  max_delta_step: 0
+
+Classification Report:
+              precision    recall  f1-score   support
+
+           0       0.97      0.91      0.94      1984
+           1       0.67      0.86      0.75       435
+
+    accuracy                           0.90      2419
+   macro avg       0.82      0.88      0.84      2419
+weighted avg       0.91      0.90      0.90      2419
+
+
+Base ROC AUC: 0.9352
+PR-AUC (Average Precision): 0.8329
+Bootstrap 95% CI (n=1000, valid_samples=1000/1000):
+- Accuracy: 0.898 (CI: 0.887, 0.911) range=0.024
+- Precision (macro): 0.817 (CI: 0.799, 0.836) range=0.038
+- Recall (macro): 0.885 (CI: 0.868, 0.903) range=0.035
+- F1 (macro): 0.844 (CI: 0.827, 0.862) range=0.035
+- ROC AUC: 0.935 (CI: 0.921, 0.948) range=0.027
+- PPV: 0.667 (CI: 0.630, 0.704) range=0.074
+- NPV: 0.968 (CI: 0.960, 0.976) range=0.016

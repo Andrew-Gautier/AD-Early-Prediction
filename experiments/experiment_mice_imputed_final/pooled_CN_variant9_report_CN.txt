@@ -1,0 +1,40 @@
+Dataset base: pooled_CN_variant9
+Progression type: CN
+Objective metric: auc
+n_trials: 1000
+Random state: 42
+Best hyperparameters:
+  n_estimators: 598
+  max_depth: 3
+  learning_rate: 0.013301950901567737
+  subsample: 0.9557075861544547
+  colsample_bytree: 0.347850044117161
+  colsample_bylevel: 0.8277951429536181
+  colsample_bynode: 0.7733928029874627
+  min_child_weight: 10
+  gamma: 0.7045172519819486
+  reg_alpha: 0.48877290077653224
+  reg_lambda: 0.2032081966437501
+  max_delta_step: 0
+
+Classification Report:
+              precision    recall  f1-score   support
+
+           0       0.97      0.90      0.93      1984
+           1       0.66      0.88      0.75       435
+
+    accuracy                           0.90      2419
+   macro avg       0.81      0.89      0.84      2419
+weighted avg       0.91      0.90      0.90      2419
+
+
+Base ROC AUC: 0.9432
+PR-AUC (Average Precision): 0.8531
+Bootstrap 95% CI (n=1000, valid_samples=1000/1000):
+- Accuracy: 0.896 (CI: 0.883, 0.908) range=0.025
+- Precision (macro): 0.814 (CI: 0.794, 0.834) range=0.040
+- Recall (macro): 0.888 (CI: 0.871, 0.904) range=0.033
+- F1 (macro): 0.843 (CI: 0.825, 0.861) range=0.036
+- ROC AUC: 0.943 (CI: 0.929, 0.956) range=0.027
+- PPV: 0.658 (CI: 0.619, 0.697) range=0.078
+- NPV: 0.971 (CI: 0.963, 0.978) range=0.015
