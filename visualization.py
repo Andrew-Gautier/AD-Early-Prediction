@@ -255,8 +255,7 @@ def plot_aggregate_roc(y_true_list, y_proba_list, label, color='#2E86AB',
 
     ax.plot(fpr_grid, mean_tpr, color=color, lw=2.5,
             label=f'{label} (AUC = {mean_auc:.3f} ± {std_auc:.3f})')
-    ax.fill_between(fpr_grid, lower, upper, color=color, alpha=0.2,
-                    label=f'{ci}% CI band')
+    ax.fill_between(fpr_grid, lower, upper, color=color, alpha=0.2)
 
     ax.plot([0, 1], [0, 1], 'k--', lw=1, alpha=0.5, label='Random classifier')
     ax.set_xlim([-0.02, 1.02])
@@ -299,8 +298,7 @@ def plot_aggregate_pr(y_true_list, y_proba_list, label, color='#E84855',
 
     ax.plot(recall_grid, mean_prec, color=color, lw=2.5,
             label=f'{label} (AP = {mean_ap:.3f} ± {std_ap:.3f})')
-    ax.fill_between(recall_grid, lower, upper, color=color, alpha=0.2,
-                    label=f'{ci}% CI band')
+    ax.fill_between(recall_grid, lower, upper, color=color, alpha=0.2)
 
     baseline = np.mean(np.concatenate(y_true_list))  # overall prevalence
     ax.axhline(baseline, color='k', linestyle='--', lw=1, alpha=0.5,
