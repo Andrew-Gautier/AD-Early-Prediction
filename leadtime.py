@@ -407,7 +407,8 @@ def analyze_run(prog_prob_df, ctrl_prob_df, threshold, mask_length):
     mask_length is applied ONLY to controls (held‑out visits from the end).
     Progressors are evaluated on all truncations up to n_visits‑2.
     Returns a dictionary with counts and performance metrics,
-    including separate categories: early, at_conversion, late, missed.
+    including separate categories: early, at_conversion, late, missed,
+    and both early-only and net (including late) lead times.
     """
     pred_cols = sorted([c for c in prog_prob_df.columns if c.isdigit()], key=int)
 
@@ -491,9 +492,15 @@ def analyze_run(prog_prob_df, ctrl_prob_df, threshold, mask_length):
     n_detected = n_early + n_at_conv + n_late
     sensitivity = n_detected / n_prog if n_prog else np.nan
 
-    lead_times = prog_df.loc[prog_df['status'] == 'detected_early', 'lead_time']
-    mean_lead = lead_times.mean() if len(lead_times) else np.nan
-    median_lead = lead_times.median() if len(lead_times) else np.nan
+    # Early-only lead times (positive)
+    early_lead_times = prog_df.loc[prog_df['status'] == 'detected_early', 'lead_time']
+    mean_lead = early_lead_times.mean() if len(early_lead_times) else np.nan
+    median_lead = early_lead_times.median() if len(early_lead_times) else np.nan
+
+    # Net lead times (all detections, including negative late ones)
+    all_detected_lead = prog_df.loc[prog_df['status'] != 'missed', 'lead_time']  # includes early, at_conv, late
+    mean_net_lead = all_detected_lead.mean() if len(all_detected_lead) else np.nan
+    median_net_lead = all_detected_lead.median() if len(all_detected_lead) else np.nan
 
     n_ctrl = len(ctrl_df)
     n_false_alarm = ctrl_df['any_alarm'].sum() if n_ctrl else 0
@@ -511,6 +518,8 @@ def analyze_run(prog_prob_df, ctrl_prob_df, threshold, mask_length):
         'specificity': specificity,
         'mean_lead_time': mean_lead,
         'median_lead_time': median_lead,
+        'mean_net_lead_time': mean_net_lead,
+        'median_net_lead_time': median_net_lead,
         'false_alarm_rate': false_alarm_rate,
         'n_ctrl': n_ctrl,
         'n_false_alarm': n_false_alarm,
@@ -548,7 +557,9 @@ def run_grid(prob_dict, thresholds, mask_lengths):
 def aggregate_grid(df_grid):
     """Group grid results by threshold and mask_length, compute mean, std, CI for all metrics."""
     group_cols = ['threshold', 'mask_length']
-    metrics = ['sensitivity', 'specificity', 'mean_lead_time', 'false_alarm_rate',
+    metrics = ['sensitivity', 'specificity', 'mean_lead_time', 'median_lead_time',
+               'mean_net_lead_time', 'median_net_lead_time',
+               'false_alarm_rate',
                'n_early', 'n_at_conv', 'n_late', 'n_missed', 'n_false_alarm']
     agg_list = []
     for (thr, mask), group in df_grid.groupby(group_cols):
