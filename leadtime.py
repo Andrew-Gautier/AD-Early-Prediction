@@ -403,10 +403,11 @@ def get_probabilities(models_dict, leadtime_csv, prog_type, cache_dir="leadtime_
 
 def analyze_run(prog_prob_df, ctrl_prob_df, threshold, mask_length):
     """
-    Compute metrics for one model's probability DataFrames, applying
-    mask_length consistently to both progressors and controls.
-
-    Returns a dictionary of aggregated metrics.
+    Compute metrics for one model's probability DataFrames.
+    mask_length is applied ONLY to controls (held‑out visits from the end).
+    Progressors are evaluated on all truncations up to n_visits‑2.
+    Returns a dictionary with counts and performance metrics,
+    including separate categories: early, at_conversion, late, missed.
     """
     pred_cols = sorted([c for c in prog_prob_df.columns if c.isdigit()], key=int)
 
@@ -417,26 +418,37 @@ def analyze_run(prog_prob_df, ctrl_prob_df, threshold, mask_length):
         progression = row['Progression']
         true_conv_month = get_conversion_month(progression, months)
         n_visits = len(months)
-        max_trunc = n_visits - mask_length - 2
+
+        # Mask NOT applied to progressors – use all truncations
+        max_trunc = n_visits - 2
         probs = []
         for c in pred_cols:
             if int(c) > max_trunc:
                 continue
             if pd.notna(row[c]):
                 probs.append(row[c])
+
+        # Find first alarm (probability >= threshold)
         alarm_idx = None
         for i, p in enumerate(probs):
             if p >= threshold:
                 alarm_idx = i
                 break
+
         if alarm_idx is None:
             status = 'missed'
             alarm_month = np.nan
             lead_time = np.nan
         else:
-            alarm_month = months[alarm_idx + 1]
+            alarm_month = months[alarm_idx + 1]   # +1 because truncation i uses first i+2 visits
             lead_time = true_conv_month - alarm_month
-            status = 'detected_early' if lead_time > 0 else 'detected_at_conversion'
+            if lead_time > 0:
+                status = 'detected_early'
+            elif lead_time == 0:
+                status = 'detected_at_conversion'
+            else:
+                status = 'detected_late'
+
         prog_records.append({
             'true_conversion_month': true_conv_month,
             'alarm_month': alarm_month,
@@ -450,6 +462,7 @@ def analyze_run(prog_prob_df, ctrl_prob_df, threshold, mask_length):
     for _, row in ctrl_prob_df.iterrows():
         months = row['months_since_baseline']
         n_visits = len(months)
+        # Apply mask to controls
         max_trunc = n_visits - mask_length - 2
         if max_trunc < 0:
             continue
@@ -471,10 +484,11 @@ def analyze_run(prog_prob_df, ctrl_prob_df, threshold, mask_length):
 
     # ---- Aggregate ----
     n_prog = len(prog_df)
-    n_detected = (prog_df['status'] != 'missed').sum()
-    n_early = (prog_df['status'] == 'detected_early').sum()
+    n_early   = (prog_df['status'] == 'detected_early').sum()
     n_at_conv = (prog_df['status'] == 'detected_at_conversion').sum()
-    n_missed = (prog_df['status'] == 'missed').sum()
+    n_late    = (prog_df['status'] == 'detected_late').sum()
+    n_missed  = (prog_df['status'] == 'missed').sum()
+    n_detected = n_early + n_at_conv + n_late
     sensitivity = n_detected / n_prog if n_prog else np.nan
 
     lead_times = prog_df.loc[prog_df['status'] == 'detected_early', 'lead_time']
@@ -491,6 +505,7 @@ def analyze_run(prog_prob_df, ctrl_prob_df, threshold, mask_length):
         'n_detected': n_detected,
         'n_early': n_early,
         'n_at_conv': n_at_conv,
+        'n_late': n_late,
         'n_missed': n_missed,
         'sensitivity': sensitivity,
         'specificity': specificity,
@@ -500,7 +515,6 @@ def analyze_run(prog_prob_df, ctrl_prob_df, threshold, mask_length):
         'n_ctrl': n_ctrl,
         'n_false_alarm': n_false_alarm,
     }
-
 
 def run_grid(prob_dict, thresholds, mask_lengths):
     """
@@ -532,14 +546,10 @@ def run_grid(prob_dict, thresholds, mask_lengths):
 
 
 def aggregate_grid(df_grid):
-    """
-    Group grid results by threshold and mask_length, compute mean, std, CI.
-
-    Returns a DataFrame with aggregated metrics.
-    """
+    """Group grid results by threshold and mask_length, compute mean, std, CI for all metrics."""
     group_cols = ['threshold', 'mask_length']
     metrics = ['sensitivity', 'specificity', 'mean_lead_time', 'false_alarm_rate',
-               'n_early', 'n_missed', 'n_false_alarm']
+               'n_early', 'n_at_conv', 'n_late', 'n_missed', 'n_false_alarm']
     agg_list = []
     for (thr, mask), group in df_grid.groupby(group_cols):
         row = {'threshold': thr, 'mask_length': mask}
@@ -563,7 +573,6 @@ def aggregate_grid(df_grid):
                 row[f'{m}_ci_upper'] = np.nan
         agg_list.append(row)
     return pd.DataFrame(agg_list)
-
 
 # -----------------------------------------------------------------------------
 # Example / test block (commented out by default)
