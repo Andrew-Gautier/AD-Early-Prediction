@@ -170,9 +170,7 @@ leadtime_prob_cache/
 | `get_conversion_month(progression, months)` | Returns the true conversion month — the first visit where `Progression` increases above its baseline value (this is the **corrected** logic; do not use `months[-1]`, which is the last observed visit and can be later than the true conversion visit for subjects with extra follow-up). |
 | `analyze_run(prog_prob_df, ctrl_prob_df, threshold, mask_length)` | Scores one model's cached probabilities at a given `threshold`/`mask_length`, applying the mask consistently to both progressors and controls, and returns sensitivity, specificity, mean/median lead time, false-alarm rate, and detection-outcome counts (`n_early`, `n_at_conv`, `n_missed`). |
 | `run_grid(prob_dict, thresholds, mask_lengths)` | Runs `analyze_run` for every model × threshold × mask_length combination. |
-| `aggregate_grid(df_grid)` | Groups the grid by `(threshold, mask_length)` and computes mean/std/95% CI (via `mean_ci`) across all models for each metric. |
-
-**Note:** `analyze_progressors`/`analyze_controls`/`summarize_leadtime`/`plot_leadtime_summary` are an older, single-model-oriented API (predates the multi-model grid-search functions above) — they now also use the corrected `get_conversion_month` logic, but are largely superseded by `analyze_run`/`run_grid`/`aggregate_grid` for aggregate, cross-model figures.
+| `aggregate_grid(df_grid)` | Groups the grid by `(threshold, mask_length)` and computes mean/std/95% CI (via `mean_ci`) across all models for each metric. 
 
 **How to generate lead-time figures:**
 1. Load models with `load_models`, get cached probabilities with `get_probabilities` (or read directly from `leadtime_prob_cache/{imputation}/{cohort}/{model_key}/*.csv` and parse list columns yourself).
