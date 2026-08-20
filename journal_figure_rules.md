@@ -56,6 +56,10 @@ Generate a TIFF figure file that meets all PLOS Digital Health technical specifi
 #### 11. Orientation
 - Submit the figure in the **final desired orientation**—it will be published as supplied
 
+#### 12. Reporting Precision
+- Round summary statistics shown in figure legends/labels (e.g., mean AUC/AP and their std or CI spread) to the **nearest 0.005**, using a single shared helper (`round_to_increment` in `visualization.py`) rather than plain `.3f`/`.2f` string formatting, which only rounds to the nearest 0.001/0.01 and can silently diverge from the intended precision.
+- Keep saved data files (e.g. `aggregate_stats.csv`) at full float precision—only round at display/formatting time, so every reporting surface (figure legend, table, printed summary) stays consistent even if the values are computed by different code paths.
+
 ---
 
 ### Python Implementation Guidelines

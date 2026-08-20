@@ -12,6 +12,19 @@ from sklearn.metrics import (
 )
 
 
+def round_to_increment(x, increment=0.005):
+    """Round x to the nearest multiple of `increment` (default 0.005).
+
+    Use this single helper anywhere a summary statistic (e.g. AUC/AP means and
+    their std/CI spread) is formatted for display in a figure legend, table, or
+    printed report, so that reporting is consistent regardless of the source
+    (live-computed from y_true/y_proba, or read back from a saved stats CSV).
+    Do NOT round the underlying data files (e.g. aggregate_stats.csv) themselves
+    keep those at full float precision; only round at display time.
+    """
+    return round(x / increment) * increment
+
+
 
 def plot_feature_importance(importances, feature_names, top_n=50, title=None, save_path=None,
                             title_fontsize=14, label_fontsize=12, tick_fontsize=10, value_fontsize=8):
@@ -254,7 +267,7 @@ def plot_aggregate_roc(y_true_list, y_proba_list, label, color='#2E86AB',
         fig, ax = plt.subplots(figsize=(7, 6))
 
     ax.plot(fpr_grid, mean_tpr, color=color, lw=2.5,
-            label=f'{label} (AUC = {mean_auc:.3f} ± {std_auc:.3f})')
+            label=f'{label} (AUC = {round_to_increment(mean_auc):.3f} ± {round_to_increment(std_auc):.3f})')
     ax.fill_between(fpr_grid, lower, upper, color=color, alpha=0.2)
 
     ax.plot([0, 1], [0, 1], 'k--', lw=1, alpha=0.5, label='Random classifier')
@@ -297,7 +310,7 @@ def plot_aggregate_pr(y_true_list, y_proba_list, label, color='#E84855',
         fig, ax = plt.subplots(figsize=(7, 6))
 
     ax.plot(recall_grid, mean_prec, color=color, lw=2.5,
-            label=f'{label} (AP = {mean_ap:.3f} ± {std_ap:.3f})')
+            label=f'{label} (AP = {round_to_increment(mean_ap):.3f} ± {round_to_increment(std_ap):.3f})')
     ax.fill_between(recall_grid, lower, upper, color=color, alpha=0.2)
 
     baseline = np.mean(np.concatenate(y_true_list))  # overall prevalence
